@@ -1,0 +1,1565 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import re
+import pandas as pd
+from openpyxl import load_workbook
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+from datetime import datetime
+
+
+class CostTrackerExtractor:
+    def __init__(self, city_ranking_path=None, reseller_list_path=None):
+        # Store type keywords
+        self.city_ranking_df = None
+        self.reseller_list_df = None
+        self.city_ranking_path = city_ranking_path
+        self.reseller_list_path = reseller_list_path
+        self.load_lookup_files()
+
+    def load_lookup_files(self):
+        """加载辅助文件"""
+        try:
+            if self.city_ranking_path and os.path.exists(self.city_ranking_path):
+                self.city_ranking_df = pd.read_excel(self.city_ranking_path)
+                print(f"[OK] Loaded city ranking file: {len(self.city_ranking_df)} records")
+            else:
+                print(f"[Warning] City ranking file not found or not specified")
+
+            if self.reseller_list_path and os.path.exists(self.reseller_list_path):
+                self.reseller_list_df = pd.read_excel(self.reseller_list_path)
+                print(f"[OK] Loaded reseller list file: {len(self.reseller_list_df)} records")
+            else:
+                print(f"[Warning] Reseller list file not found or not specified")
+
+        except Exception as e:
+            print(f"[Warning] Error loading lookup files: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def vlookup_city_rank(self, city_name):
+        """查找City Rank"""
+        if self.city_ranking_df is None or city_name is None or city_name == "":
+            return "Unknown"
+
+        try:
+            city_name_clean = str(city_name).strip().lower()
+            city_col = self.city_ranking_df.columns[0]
+            rank_col = self.city_ranking_df.columns[1] if len(self.city_ranking_df.columns) > 1 else self.city_ranking_df.columns[0]
+
+            for idx, row in self.city_ranking_df.iterrows():
+                df_city = str(row[city_col]).strip().lower()
+                if df_city == city_name_clean:
+                    return row[rank_col]
+
+            return "Unknown"
+        except Exception as e:
+            print(f"[ERROR] Error in vlookup_city_rank for '{city_name}': {str(e)}")
+            return "Unknown"
+
+    def vlookup_rtm_level4(self, reseller_name):
+        """模拟VLOOKUP查找RTM Level 4"""
+        if self.reseller_list_df is None or reseller_name is None or reseller_name == "":
+            print(f"[DEBUG] RTM Level 4 lookup skipped - DataFrame is None or reseller_name is empty")
+            return ""
+
+        try:
+            # 清理经销商名称 - 去除前后空格并转为字符串
+            reseller_name_clean = str(reseller_name).strip()
+
+            # 假设第一列是Reseller Name，第7列（索引6）是RTM Level 4
+            reseller_col = self.reseller_list_df.columns[0]
+
+            # 检查是否有第7列
+            if len(self.reseller_list_df.columns) < 7:
+                print(f"[ERROR] Reseller list has only {len(self.reseller_list_df.columns)} columns, need at least 7")
+                return ""
+
+            rtm_col = self.reseller_list_df.columns[6]  # 第7列（索引6）
+
+            # 遍历DataFrame进行匹配
+            for idx, row in self.reseller_list_df.iterrows():
+                df_reseller = str(row[reseller_col]).strip()
+
+                # 精确匹配（不区分大小写）
+                if df_reseller.lower() == reseller_name_clean.lower():
+                    rtm_value = row[rtm_col]
+                    print(f"[DEBUG] RTM Level 4 found for '{reseller_name_clean}': '{rtm_value}'")
+                    return rtm_value
+
+            # 如果没找到，打印调试信息
+            print(f"[DEBUG] RTM Level 4 NOT found for: '{reseller_name_clean}'")
+            # 打印前5个经销商名称供参考
+            if len(self.reseller_list_df) > 0:
+                sample_names = [str(self.reseller_list_df.iloc[i, 0]).strip() for i in range(min(5, len(self.reseller_list_df)))]
+                print(f"[DEBUG] Sample reseller names in list: {sample_names}")
+
+            return ""
+        except Exception as e:
+            print(f"[ERROR] Error in vlookup_rtm_level4 for '{reseller_name}': {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return ""
+
+    def extract_case_no_from_filename(self, folder_name):
+        """从文件夹名称中提取Case No，例如 '9) 266187 Sunion...' 提取 '9'"""
+        try:
+            # 匹配开头的数字，后面可能跟着 ')' 或空格
+            match = re.match(r'^(\d+)', folder_name)
+            if match:
+                case_no = match.group(1)
+                print(f"[DEBUG] Extracted Case No: '{case_no}' from folder: '{folder_name}'")
+                return case_no
+            print(f"[DEBUG] Case No not found in folder: '{folder_name}'")
+            return ""
+        except Exception as e:
+            print(f"[ERROR] Error extracting case no: {str(e)}")
+            return ""
+
+    def extract_sfoid_from_filename(self, folder_name):
+        """从文件夹名称中提取SFOID，例如 '...(FY260010740)' 提取 'FY260010740'"""
+        try:
+            # 匹配最后一个括号中以FY开头的内容
+            match = re.search(r'\((FY\d+)\)$', folder_name)
+            if match:
+                sfoid = match.group(1)
+                print(f"[DEBUG] Extracted SFOID: '{sfoid}' from folder: '{folder_name}'")
+                return sfoid
+
+            # 如果没找到FY开头的，尝试匹配最后括号中的任意内容
+            match = re.search(r'\(([^)]+)\)$', folder_name)
+            if match:
+                sfoid = match.group(1)
+                print(f"[DEBUG] Extracted SFOID (generic): '{sfoid}' from folder: '{folder_name}'")
+                return sfoid
+
+            print(f"[DEBUG] SFOID not found in folder: '{folder_name}'")
+            return ""
+        except Exception as e:
+            print(f"[ERROR] Error extracting SFOID: {str(e)}")
+            return ""
+
+    def safe_read_cell(self, sheet, cell_ref, default=0):
+        """安全读取单元格值，如果为None则返回默认值"""
+        try:
+            value = sheet[cell_ref].value
+            if value is None:
+                return default
+            # 如果是数字类型，直接返回
+            if isinstance(value, (int, float)):
+                return value
+            # 如果是字符串，尝试转换为数字
+            if isinstance(value, str):
+                # 移除逗号和空格
+                cleaned = value.replace(',', '').replace(' ', '').strip()
+                if cleaned == '' or cleaned == '-':
+                    return default
+                try:
+                    return float(cleaned)
+                except:
+                    return value
+            return value
+        except Exception as e:
+            print(f"Error reading cell {cell_ref}: {str(e)}")
+            return default
+
+    def safe_divide(self, numerator, denominator, default=0):
+        """安全除法，避免除以0"""
+        try:
+            if denominator == 0 or denominator is None:
+                return default
+            return numerator / denominator
+        except:
+            return default
+
+    def process_single_file(self, file_path, year=None, quarter=None, week=None):
+        """
+        处理单个Excel文件，提取50个字段的数据
+        """
+        try:
+            filename = os.path.basename(file_path)
+
+            # 获取父文件夹名称（用于提取 Case No. 和 SFOID）
+            parent_folder = os.path.basename(os.path.dirname(file_path))
+            print(f"[DEBUG] Processing file: {filename}")
+            print(f"[DEBUG] Parent folder: {parent_folder}")
+
+            # 打开Excel文件
+            wb = load_workbook(file_path, data_only=True, read_only=False)
+
+            # 检查必需的sheet是否存在
+            input_sheet_name = 'input'
+            pnl_usd_sheet_name = 'Partner P&L ($USD)'
+            pnl_local_sheet_name = 'Partner P&L (Local Currency)'
+
+            # 查找input sheet（不区分大小写）
+            if input_sheet_name not in wb.sheetnames:
+                for name in wb.sheetnames:
+                    if name.lower() == 'input':
+                        input_sheet_name = name
+                        break
+                else:
+                    wb.close()
+                    return False, [], f"Input sheet not found"
+
+            ws_input = wb[input_sheet_name]
+
+            # 查找P&L sheets
+            ws_pnl_usd = None
+            ws_pnl_local = None
+
+            for name in wb.sheetnames:
+                if 'partner p&l' in name.lower() and 'usd' in name.lower():
+                    ws_pnl_usd = wb[name]
+                elif 'partner p&l' in name.lower() and 'local' in name.lower():
+                    ws_pnl_local = wb[name]
+
+            # 开始提取数据
+            data_row = {}
+
+            # 1. RTM Level 4
+            reseller_name = self.safe_read_cell(ws_input, 'D13', "")
+            data_row['RTM Level 4'] = self.vlookup_rtm_level4(reseller_name)
+
+            # 2. APR or APP
+            data_row['APR or APP'] = self.safe_read_cell(ws_input, 'M26', "")
+
+            # 3. RTM#
+            data_row['RTM#'] = ""
+
+            # 4. Self-fund
+            data_row['Self-fund'] = ""
+
+            # 5. Review date - 使用当前程序运行日期
+            data_row['Review date'] = datetime.now().strftime('%Y-%m-%d')
+            
+            # 6. New/Refit
+            data_row['New/Refit'] = self.safe_read_cell(ws_input, 'I22', "")
+            
+            # 7. Status
+            data_row['Status'] = "WW approved"
+            
+            # 8. Comments
+            data_row['Comments'] = ""
+            
+            # 9. HQ ID
+            data_row['HQ ID'] = self.safe_read_cell(ws_input, 'D14', "")
+
+            # 10. Case No. - 从父文件夹名称提取
+            data_row['Case No.'] = self.extract_case_no_from_filename(parent_folder)
+
+            # 11. Apple ID - 增强提取逻辑
+            apple_id = self.safe_read_cell(ws_input, 'D17', "")
+
+            # 如果D17为空，尝试读取周围单元格作为fallback
+            if not apple_id or str(apple_id).strip() == "":
+                print(f"[DEBUG] Apple ID at D17 is empty for file: {filename}")
+                print(f"[DEBUG] Trying fallback cells...")
+
+                # 尝试读取D16, D18, E17作为fallback
+                fallback_cells = ['D16', 'D18', 'E17']
+                for cell_ref in fallback_cells:
+                    fallback_value = self.safe_read_cell(ws_input, cell_ref, "")
+                    if fallback_value and str(fallback_value).strip() != "":
+                        print(f"[DEBUG] Found Apple ID in fallback cell {cell_ref}: '{fallback_value}'")
+                        apple_id = fallback_value
+                        break
+
+                if not apple_id or str(apple_id).strip() == "":
+                    print(f"[DEBUG] Apple ID not found in D17 or fallback cells")
+                    # 打印D17单元格的详细信息
+                    d17_cell = ws_input['D17']
+                    print(f"[DEBUG] D17 cell details - value: {d17_cell.value}, data_type: {d17_cell.data_type}")
+            else:
+                print(f"[DEBUG] Apple ID found at D17: '{apple_id}'")
+
+            data_row['Apple ID'] = apple_id
+
+            # 12. SFOID/工单编号 - 从父文件夹名称提取
+            data_row['SFOID/工单编号'] = self.extract_sfoid_from_filename(parent_folder)
+            
+            # 13. Appoint date
+            data_row['Appoint date'] = ""
+            
+            # 14. Reseller name
+            data_row['Reseller name'] = reseller_name
+            
+            # 15. Store name
+            data_row['Store name'] = self.safe_read_cell(ws_input, 'I23', "")
+            
+            # 16. City (处理合并单元格 D24:E24)
+            city_value = ws_input['D24'].value
+            if city_value is None:
+                # 尝试从合并单元格读取
+                for merge_range in ws_input.merged_cells.ranges:
+                    if (merge_range.min_row == 24 and merge_range.max_row == 24 and
+                            merge_range.min_col == 4 and merge_range.max_col == 5):
+                        city_value = ws_input.cell(row=merge_range.min_row, column=merge_range.min_col).value
+                        break
+            data_row['City'] = str(city_value).strip() if city_value is not None else ""
+            
+            # 17. City rank
+            data_row['City rank'] = self.vlookup_city_rank(data_row['City'])
+            
+            # 18. City Tier
+            data_row['City Tier'] = ""
+            
+            # 19. Appointed week
+            data_row['Appointed week'] = ""
+            
+            # 20. Mall sales (RMB Bn)
+            q23_value = self.safe_read_cell(ws_input, 'Q23', 0)
+            data_row['Mall sales (RMB Bn)'] = self.safe_divide(q23_value, 1000000000, 0)
+            
+            # 21. Mall size (sqm)
+            data_row['Mall size (sqm)'] = self.safe_read_cell(ws_input, 'Q25', 0)
+            
+            # 22. Mall sales / sqm (RMB)
+            i26_value = self.safe_read_cell(ws_input, 'I26', 0)
+            data_row['Mall sales / sqm (RMB)'] = self.safe_divide(q23_value, i26_value, 0)
+            
+            # 23. Store size
+            data_row['Store size'] = i26_value
+            
+            # 24. Year 1 Traffic
+            data_row['Year 1 Traffic'] = self.safe_read_cell(ws_input, 'M22', 0)
+            
+            # 25. Year 1 CPU ST/week
+            data_row['Year 1 CPU ST/week'] = self.safe_read_cell(ws_input, 'V52', 0)
+            
+            # 26. Year 1 iPod /AirPodsST/week
+            data_row['Year 1 iPod /AirPodsST/week'] = self.safe_read_cell(ws_input, 'V55', 0)
+            
+            # 27. Year 1 iPhone ST/week
+            data_row['Year 1 iPhone ST/week'] = self.safe_read_cell(ws_input, 'V51', 0)
+            
+            # 28. Year 1 iPad ST/week
+            data_row['Year 1 iPad ST/week'] = self.safe_read_cell(ws_input, 'V53', 0)
+            
+            # 29. Year 1 Watch ST/week
+            data_row['Year 1 Watch ST/week'] = self.safe_read_cell(ws_input, 'V54', 0)
+            
+            # 30. Year 1 third Party % of total revenue
+            data_row['Year 1 third Party % of total revenue'] = self.safe_read_cell(ws_input, 'R61', 0)
+            
+            # 31-38: 从 Partner P&L ($USD) sheet 读取
+            if ws_pnl_usd:
+                # 31. Year 1 Apple Rev (USD)
+                data_row['Year 1 Apple Rev (USD)'] = self.safe_read_cell(ws_pnl_usd, 'C10', 0)
+                
+                # 32. Year 1 ST$ (USD) = C9 + C24 - C69
+                c9 = self.safe_read_cell(ws_pnl_usd, 'C9', 0)
+                c24 = self.safe_read_cell(ws_pnl_usd, 'C24', 0)
+                c69 = self.safe_read_cell(ws_pnl_usd, 'C69', 0)
+                data_row['Year 1 ST$ (USD)'] = c9 + c24 - c69
+                
+                # 33. Year 1 Total Revenue (USD)
+                data_row['Year 1 Total Revenue (USD)'] = c9
+                
+                # 35. Year 1 gross profit (USD)
+                data_row['Year 1 gross profit (USD)'] = c69
+                
+                # 36. Year 1 gross margin %
+                data_row['Year 1 gross margin %'] = self.safe_read_cell(ws_pnl_usd, 'H69', 0)
+                
+                # 37. Year 1 total expenses (USD) - 取负数
+                c70 = self.safe_read_cell(ws_pnl_usd, 'C70', 0)
+                data_row['Year 1 total expenses (USD)'] = c70 * -1
+                
+                # 38. Year 1 total revised expenses (USD)
+                data_row['Year 1 total revised expenses (USD)'] = self.safe_read_cell(ws_pnl_usd, 'AK41', 0)
+                
+                # 48. EBITDA
+                data_row['EBITDA'] = self.safe_read_cell(ws_pnl_usd, 'H88', 0)
+            else:
+                data_row['Year 1 Apple Rev (USD)'] = 0
+                data_row['Year 1 ST$ (USD)'] = 0
+                data_row['Year 1 Total Revenue (USD)'] = 0
+                data_row['Year 1 gross profit (USD)'] = 0
+                data_row['Year 1 gross margin %'] = 0
+                data_row['Year 1 total expenses (USD)'] = 0
+                data_row['Year 1 total revised expenses (USD)'] = 0
+                data_row['EBITDA'] = 0
+            
+            # 34. Total Revenue in RMB/Month
+            if ws_pnl_local:
+                c9_local = self.safe_read_cell(ws_pnl_local, 'C9', 0)
+                data_row['Total Revenue in RMB/Month'] = self.safe_divide(c9_local, 12, 0)
+            else:
+                data_row['Total Revenue in RMB/Month'] = 0
+            
+            # 39. Credit card cost as % of revenue
+            data_row['Credit card cost as % of revenue'] = self.safe_read_cell(ws_input, 'M80', 0)
+            
+            # 40. Year 1 BE Revenue (USD/year)
+            data_row['Year 1 BE Revenue (USD/year)'] = self.safe_read_cell(ws_input, 'M53', 0)
+
+            # 41. Year 1 BE Revenue (RMB/month) - 新增字段
+            be_revenue_usd = data_row['Year 1 BE Revenue (USD/year)']
+            # 假设汇率为7（可根据实际情况调整）
+            data_row['Year 1 BE Revenue (RMB/month)'] = self.safe_divide(be_revenue_usd * 7, 12, 0)
+
+            # 42. Year 1 net income (USD) - 新增字段
+            # net income = gross profit - total expenses
+            gross_profit = data_row.get('Year 1 gross profit (USD)', 0)
+            total_expenses = data_row.get('Year 1 total expenses (USD)', 0)
+            data_row['Year 1 net income (USD)'] = gross_profit - total_expenses
+
+            # 43. Year 1 net income % - 新增字段
+            total_revenue = data_row.get('Year 1 Total Revenue (USD)', 0)
+            net_income = data_row['Year 1 net income (USD)']
+            data_row['Year 1 net income %'] = self.safe_divide(net_income, total_revenue, 0)
+
+            # 44. Rent/ month excl. utilities from Reseller (LC)
+            n48_value = self.safe_read_cell(ws_input, 'N48', 0)
+            data_row['Rent/ month excl. utilities from Reseller (LC)'] = self.safe_divide(n48_value, 12, 0)
+
+            # 45. Rent/sqm/day (LC) - 新增字段
+            rent_per_month = data_row['Rent/ month excl. utilities from Reseller (LC)']
+            store_size = data_row.get('Store size', 0)
+            data_row['Rent/sqm/day (LC)'] = self.safe_divide(rent_per_month, (store_size * 30), 0)
+
+            # 46. Biz plan property cost/year incl. utilities (USD)
+            data_row['Biz plan property cost/year incl. utilities (USD)'] = self.safe_read_cell(ws_input, 'M53', 0)
+
+            # 47. Property cost/sqm/yr - 新增字段
+            property_cost_year = data_row['Biz plan property cost/year incl. utilities (USD)']
+            data_row['Property cost/sqm/yr'] = self.safe_divide(property_cost_year, store_size, 0)
+
+            # 48. Utilities as % of rent cost - 新增字段
+            data_row['Utilities as % of rent cost'] = 0  # 需要具体单元格位置
+
+            # 49. Property cost incl. utilities as % of total rev. - 新增字段
+            data_row['Property cost incl. utilities as % of total rev.'] = self.safe_divide(property_cost_year, total_revenue, 0)
+
+            # 50. Total staff cost (USD)
+            data_row['Total staff cost (USD)'] = self.safe_read_cell(ws_input, 'M68', 0)
+
+            # 51. Staff cost as % of revenue - 新增字段
+            staff_cost = data_row['Total staff cost (USD)']
+            data_row['Staff cost as % of revenue'] = self.safe_divide(staff_cost, total_revenue, 0)
+
+            # 52. No. of staff
+            m65 = self.safe_read_cell(ws_input, 'M65', 0)
+            m66 = self.safe_read_cell(ws_input, 'M66', 0)
+            m67 = self.safe_read_cell(ws_input, 'M67', 0)
+            data_row['No. of staff'] = m65 + m66 + m67
+
+            # 53. Avg. montly Cost/staff (LC) - 新增字段
+            num_staff = data_row['No. of staff']
+            data_row['Avg. montly Cost/staff (LC)'] = self.safe_divide(staff_cost * 7 / 12, num_staff, 0) if num_staff > 0 else 0
+
+            # 54. Showroom staff as % of total staff cost - 新增字段
+            data_row['Showroom staff as % of total staff cost'] = 0  # 需要具体单元格位置
+
+            # 55. SFF ($)
+            sff = self.safe_read_cell(ws_input, 'D56', 0)
+            data_row['SFF ($)'] = sff
+
+            # 56. SLF ($)
+            slf = self.safe_read_cell(ws_input, 'D57', 0)
+            data_row['SLF ($)'] = slf
+
+            # 57. Trafic Counter ($) - 新增字段
+            traffic_counter = self.safe_read_cell(ws_input, 'D58', 0)  # 假设在D58
+            data_row['Trafic Counter ($)'] = traffic_counter
+
+            # 58. ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)) - 修改ROI计算
+            apple_rev = data_row['Year 1 Apple Rev (USD)']
+            total_investment = sff + slf + traffic_counter
+            data_row['ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)'] = self.safe_divide(apple_rev, total_investment, 0)
+
+            # 59. EBITDA (已在前面设置)
+            # data_row['EBITDA'] 已经设置
+
+            # 60. Payback Period - 新增字段
+            # Payback Period = Total Investment / Annual Net Income
+            annual_net_income = data_row['Year 1 net income (USD)']
+            data_row['Payback Period'] = self.safe_divide(total_investment, annual_net_income, 0) if annual_net_income > 0 else 0
+
+            # 61. CY (当前年份)
+            data_row['CY'] = datetime.now().year
+
+            # 62. Financial Risk - 新增字段
+            data_row['Financial Risk'] = ""  # 需要具体逻辑或单元格位置
+
+            # 63. Risk Comment - 新增字段
+            data_row['Risk Comment'] = ""  # 需要具体逻辑或单元格位置
+
+            # 64. HQ Burden cost as % of revenue
+            data_row['HQ Burden cost as % of revenue'] = self.safe_read_cell(ws_input, 'M79', 0)
+            
+            # 添加元数据
+            data_row['Filename'] = filename
+            data_row['Year'] = year if year else "Not specified"
+            data_row['Quarter'] = quarter if quarter else "Not specified"
+            data_row['Week'] = week if week else "Not specified"
+            data_row['YearQuarter'] = f"{year}{quarter}" if year and quarter else "Not specified"
+            data_row['ProcessingTime'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            wb.close()
+            
+            return True, [data_row], "Successfully processed"
+            
+        except Exception as e:
+            return False, [], f"Error processing file: {str(e)}"
+
+    def batch_process_week_folder(self, folder_path, year=None, quarter=None, week=None):
+        """批量处理特定周文件夹中的所有Excel文件"""
+        if not os.path.exists(folder_path):
+            return [], f"Week folder does not exist: {folder_path}"
+        
+        excel_extensions = ['.xlsx', '.xls', '.xlsm']
+        excel_files = []
+        
+        print(f"Start searching week folder: {folder_path}")
+        
+        # 搜索Excel文件
+        for root, dirs, files in os.walk(folder_path):
+            print(f"Searching directory: {root}")
+            print(f"Number of files in directory: {len(files)}")
+            
+            for file in files:
+                file_extension = os.path.splitext(file)[1].lower()
+                filename_upper = file.upper()
+                
+                # 检查是否以APR或APP开头且是Excel文件
+                if (filename_upper.startswith('APR') and file_extension in excel_extensions) or (
+                        filename_upper.startswith('APP') and file_extension in excel_extensions):
+                    full_path = os.path.join(root, file)
+                    excel_files.append(full_path)
+                    print(f"Found APR/APP file: {full_path}")
+                elif file_extension in excel_extensions:
+                    full_path = os.path.join(root, file)
+                    print(f"Found non-APR Excel file: {full_path}")
+        
+        # 如果没有找到APR文件，尝试搜索所有Excel文件
+        if not excel_files:
+            print("No APR Excel files found, trying to search all Excel files...")
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_extension = os.path.splitext(file)[1].lower()
+                    if file_extension in excel_extensions:
+                        full_path = os.path.join(root, file)
+                        excel_files.append(full_path)
+                        print(f"Found file: {full_path}")
+        
+        if not excel_files:
+            return [], f"No Excel files found in week folder"
+        
+        print(f"Found {len(excel_files)} Excel files in week {week}")
+        
+        # 处理每个文件
+        all_data = []
+        success_count = 0
+        fail_count = 0
+        failed_files = []
+        
+        for file_path in excel_files:
+            print(f"Processing: {os.path.basename(file_path)}")
+            success, data, message = self.process_single_file(file_path, year, quarter, week)
+            
+            if success:
+                all_data.extend(data)
+                success_count += 1
+                print(f"  ✓ Success: {message}")
+            else:
+                fail_count += 1
+                failed_files.append((os.path.basename(file_path), message))
+                print(f"  ✗ Failed: {message}")
+        
+        return all_data, success_count, fail_count, failed_files, len(excel_files)
+
+    def batch_process_quarter_folder(self, quarter_folder_path, year=None, quarter=None):
+        """批量处理包含周子文件夹（W1, W2, ..., W13）的季度文件夹"""
+        if not os.path.exists(quarter_folder_path):
+            return [], f"Quarter folder does not exist: {quarter_folder_path}"
+        
+        print(f"Start processing quarter folder: {quarter_folder_path}")
+        
+        # 查找所有周文件夹（W开头，后面跟着数字1-13）
+        week_folders = []
+        for item in os.listdir(quarter_folder_path):
+            item_path = os.path.join(quarter_folder_path, item)
+            if os.path.isdir(item_path):
+                week_match = re.match(r'^W(\d{1,2})', item, re.IGNORECASE)
+                if week_match:
+                    week_num = int(week_match.group(1))
+                    if 1 <= week_num <= 13:
+                        week_folders.append((item_path, week_num, item))
+                        print(f"Found week folder: {item} (Week {week_num})")
+        
+        if not week_folders:
+            return [], f"No week folders (starting with W1, W2, ..., W13) found in quarter folder"
+        
+        # 按周数排序
+        week_folders.sort(key=lambda x: x[1])
+        
+        print(f"Found {len(week_folders)} week folders")
+        
+        # 处理每个周文件夹
+        all_data = []
+        total_excel_files = 0
+        total_success = 0
+        total_fail = 0
+        all_failed_files = []
+        week_stats = []
+        
+        for week_folder_path, week_num, folder_name in week_folders:
+            week_str = f"Week {week_num}"
+            print(f"\n{'=' * 50}")
+            print(f"Processing {week_str} ({folder_name})...")
+            print(f"{'=' * 50}")
+            
+            week_data, success_count, fail_count, failed_files, excel_count = self.batch_process_week_folder(
+                week_folder_path, year, quarter, week_str
+            )
+            
+            # 添加周数据到总数据
+            all_data.extend(week_data)
+            
+            # 更新统计
+            total_excel_files += excel_count
+            total_success += success_count
+            total_fail += fail_count
+            all_failed_files.extend(failed_files)
+            
+            week_stats.append({
+                'Week': week_str,
+                'Folder': folder_name,
+                'ExcelFiles': excel_count,
+                'SuccessFiles': success_count,
+                'FailedFiles': fail_count,
+                'Records': len(week_data)
+            })
+            
+            print(f"{week_str} ({folder_name}) completed: {success_count}/{excel_count} files successful, {len(week_data)} records")
+        
+        # 统计信息
+        summary_info = {
+            'TotalFiles': total_excel_files,
+            'SuccessFiles': total_success,
+            'FailedFiles': total_fail,
+            'TotalRecords': len(all_data),
+            'FailedFileList': all_failed_files,
+            'Year': year,
+            'Quarter': quarter,
+            'WeekStats': week_stats,
+            'SearchFolder': quarter_folder_path,
+            'WeeksProcessed': len(week_folders)
+        }
+        
+        return all_data, summary_info
+
+
+class CostTrackerInterface:
+    def __init__(self):
+        self.all_data = []
+        self.previous_file_path = None
+        self.city_ranking_file_path = None
+        self.reseller_list_file_path = None
+
+        # 检测操作系统并设置适当的字体
+        import platform
+        system = platform.system()
+        if system == 'Darwin':  # macOS
+            self.title_font = ("PingFang SC", 18, "bold")
+            self.subtitle_font = ("PingFang SC", 9)
+            self.label_font = ("PingFang SC", 9, "bold")
+            self.normal_font = ("PingFang SC", 9)
+            self.button_font = ("PingFang SC", 11, "bold")
+        elif system == 'Windows':
+            self.title_font = ("Microsoft YaHei UI Light", 18, "bold")
+            self.subtitle_font = ("Microsoft YaHei UI Light", 9)
+            self.label_font = ("Microsoft YaHei UI", 9, "bold")
+            self.normal_font = ("Microsoft YaHei UI", 9)
+            self.button_font = ("Microsoft YaHei UI", 11, "bold")
+        else:  # Linux and others
+            self.title_font = ("Sans", 18, "bold")
+            self.subtitle_font = ("Sans", 9)
+            self.label_font = ("Sans", 9, "bold")
+            self.normal_font = ("Sans", 9)
+            self.button_font = ("Sans", 11, "bold")
+
+        # 创建主窗口
+        self.root = tk.Tk()
+        self.root.title("Brief Cost Tracker Case Data Builder v1.0")
+        self.root.geometry("1200x950")
+
+        # 初始化 extractor 为 None，稍后创建
+        self.extractor = None
+
+        self.create_interface()
+
+    def create_interface(self):
+        # 配置根窗口 - 蓝色系
+        self.root.configure(bg="#e3f2fd")
+
+        # 顶部标题 - 深蓝色
+        title_frame = tk.Frame(self.root, bg="#1976d2", height=80)
+        title_frame.pack(fill='x')
+        title_frame.pack_propagate(False)
+
+        tk.Label(title_frame, text="Brief Cost Tracker Case Data Builder",
+                 font=self.title_font, fg="#ffffff", bg="#1976d2").pack(pady=12)
+        tk.Label(title_frame, text="Version 1.0 - Professional Edition",
+                 font=self.subtitle_font, fg="#bbdefb", bg="#1976d2").pack()
+
+        # 主容器 - 浅蓝色背景
+        main_container = tk.Frame(self.root, bg="#e3f2fd")
+        main_container.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # 左侧：控制面板 - 白色背景，蓝色文字
+        control_panel = tk.LabelFrame(main_container, text=" Extraction Control ",
+                                      font=("Microsoft YaHei UI", 11, "bold"),
+                                      bg="#ffffff", fg="#1565c0",
+                                      relief=tk.FLAT, bd=0)
+        control_panel.pack(side='left', fill='y', padx=(0, 15), ipadx=10, ipady=10)
+
+        # 季度文件夹选择
+        tk.Label(control_panel, text="Quarter Folder",
+                font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(20, 5))
+        folder_frame = tk.Frame(control_panel, bg="#ffffff")
+        folder_frame.pack(fill='x', padx=15, pady=5)
+
+        self.folder_path_var = tk.StringVar()
+        folder_entry = tk.Entry(folder_frame, textvariable=self.folder_path_var, width=28,
+                 font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bg="#e3f2fd",
+                 fg="#0d47a1", insertbackground="#1976d2", bd=1)
+        folder_entry.pack(side='left', fill='x', expand=True, ipady=6)
+
+        browse_btn = tk.Button(folder_frame, text="Browse", command=self.select_folder,
+                  font=("Microsoft YaHei UI", 9), bg="#64b5f6", fg="#ffffff",
+                  relief=tk.FLAT, cursor="hand2", padx=12, pady=4, bd=0,
+                  activebackground="#42a5f5", activeforeground="#ffffff")
+        browse_btn.pack(side='right', padx=(8, 0))
+        browse_btn.bind("<Enter>", lambda e: browse_btn.config(bg="#42a5f5"))
+        browse_btn.bind("<Leave>", lambda e: browse_btn.config(bg="#64b5f6"))
+
+        # 年份选择
+        tk.Label(control_panel, text="Year",
+                font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(20, 5))
+
+        self.year_var = tk.StringVar()
+        year_combo = ttk.Combobox(control_panel, textvariable=self.year_var,
+                                  values=[str(year) for year in range(2019, 2027)],
+                                  width=26, font=("Microsoft YaHei UI", 9), state="readonly")
+        year_combo.pack(fill='x', padx=15, pady=5)
+
+        # 季度选择
+        tk.Label(control_panel, text="Quarter",
+                font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(18, 5))
+
+        self.quarter_var = tk.StringVar()
+        quarter_combo = ttk.Combobox(control_panel, textvariable=self.quarter_var,
+                                     values=['Q1', 'Q2', 'Q3', 'Q4'],
+                                     width=26, font=("Microsoft YaHei UI", 9), state="readonly")
+        quarter_combo.pack(fill='x', padx=15, pady=5)
+
+        # 注意事项 - 浅蓝色背景
+        note_frame = tk.Frame(control_panel, bg="#e3f2fd", relief=tk.FLAT, bd=1)
+        note_frame.pack(fill='x', padx=15, pady=(20, 10))
+
+        tk.Label(note_frame, text="ℹ️ Note",
+                font=("Microsoft YaHei UI", 9, "bold"), bg="#e3f2fd", fg="#1565c0").pack(anchor='w', padx=10, pady=(8, 4))
+
+        note_text = "Quarter folder should contain\nweek subfolders (W1, W2, ..., W13)"
+        tk.Label(note_frame, text=note_text, font=("Microsoft YaHei UI", 8),
+                 justify=tk.LEFT, bg="#e3f2fd", fg="#1976d2").pack(anchor='w', padx=10, pady=(0, 8))
+
+        # City Ranking 文件选择
+        tk.Label(control_panel, text="City Ranking File (Required)",
+                 font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(20, 5))
+
+        city_file_frame = tk.Frame(control_panel, bg="#ffffff")
+        city_file_frame.pack(fill='x', padx=15, pady=5)
+
+        self.city_ranking_file_var = tk.StringVar()
+        city_entry = tk.Entry(city_file_frame, textvariable=self.city_ranking_file_var, width=23,
+                 font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bg="#e3f2fd",
+                 fg="#0d47a1", insertbackground="#1976d2", bd=1)
+        city_entry.pack(side='left', fill='x', expand=True, ipady=6)
+
+        city_btn = tk.Button(city_file_frame, text="Select", command=self.select_city_ranking_file,
+                  font=("Microsoft YaHei UI", 9), bg="#64b5f6", fg="#ffffff",
+                  relief=tk.FLAT, cursor="hand2", padx=12, pady=4, bd=0,
+                  activebackground="#42a5f5", activeforeground="#ffffff")
+        city_btn.pack(side='right', padx=(8, 0))
+        city_btn.bind("<Enter>", lambda e: city_btn.config(bg="#42a5f5"))
+        city_btn.bind("<Leave>", lambda e: city_btn.config(bg="#64b5f6"))
+
+        # Reseller List 文件选择
+        tk.Label(control_panel, text="Reseller List File (Required)",
+                 font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(15, 5))
+
+        reseller_file_frame = tk.Frame(control_panel, bg="#ffffff")
+        reseller_file_frame.pack(fill='x', padx=15, pady=5)
+
+        self.reseller_list_file_var = tk.StringVar()
+        reseller_entry = tk.Entry(reseller_file_frame, textvariable=self.reseller_list_file_var, width=23,
+                 font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bg="#e3f2fd",
+                 fg="#0d47a1", insertbackground="#1976d2", bd=1)
+        reseller_entry.pack(side='left', fill='x', expand=True, ipady=6)
+
+        reseller_btn = tk.Button(reseller_file_frame, text="Select", command=self.select_reseller_list_file,
+                  font=("Microsoft YaHei UI", 9), bg="#64b5f6", fg="#ffffff",
+                  relief=tk.FLAT, cursor="hand2", padx=12, pady=4, bd=0,
+                  activebackground="#42a5f5", activeforeground="#ffffff")
+        reseller_btn.pack(side='right', padx=(8, 0))
+        reseller_btn.bind("<Enter>", lambda e: reseller_btn.config(bg="#42a5f5"))
+        reseller_btn.bind("<Leave>", lambda e: reseller_btn.config(bg="#64b5f6"))
+
+        # 上一次结果文件选择
+        tk.Label(control_panel, text="Previous Result File (Optional)",
+                 font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(15, 5))
+
+        prev_file_frame = tk.Frame(control_panel, bg="#ffffff")
+        prev_file_frame.pack(fill='x', padx=15, pady=5)
+
+        self.prev_file_path_var = tk.StringVar()
+        prev_entry = tk.Entry(prev_file_frame, textvariable=self.prev_file_path_var, width=23,
+                 font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bg="#e3f2fd",
+                 fg="#0d47a1", insertbackground="#1976d2", bd=1)
+        prev_entry.pack(side='left', fill='x', expand=True, ipady=6)
+
+        upload_btn = tk.Button(prev_file_frame, text="Upload", command=self.select_previous_file,
+                  font=("Microsoft YaHei UI", 9), bg="#64b5f6", fg="#ffffff",
+                  relief=tk.FLAT, cursor="hand2", padx=12, pady=4, bd=0,
+                  activebackground="#42a5f5", activeforeground="#ffffff")
+        upload_btn.pack(side='right', padx=(8, 0))
+        upload_btn.bind("<Enter>", lambda e: upload_btn.config(bg="#42a5f5"))
+        upload_btn.bind("<Leave>", lambda e: upload_btn.config(bg="#64b5f6"))
+
+        # 自动填充当前季度
+        self.auto_fill_year_quarter()
+
+        # 处理按钮 - 蓝色主题
+        start_btn = tk.Button(control_panel, text="🚀 Start Extraction",
+                             command=self.start_extraction,
+                             font=("Microsoft YaHei UI", 11, "bold"), bg="#2196f3", fg="#ffffff",
+                             relief=tk.FLAT, cursor="hand2", padx=20, pady=15, bd=0,
+                             activebackground="#1976d2", activeforeground="#ffffff")
+        start_btn.pack(fill='x', padx=20, pady=25)
+        start_btn.bind("<Enter>", lambda e: start_btn.config(bg="#1976d2"))
+        start_btn.bind("<Leave>", lambda e: start_btn.config(bg="#2196f3"))
+
+        # 右侧：结果显示 - 白色背景
+        result_panel = tk.LabelFrame(main_container, text=" Extraction Results ",
+                                     font=("Microsoft YaHei UI", 11, "bold"),
+                                     bg="#ffffff", fg="#1565c0",
+                                     relief=tk.FLAT, bd=0)
+        result_panel.pack(side='right', fill='both', expand=True)
+
+        # 创建结果表格 - 蓝色主题
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure("Blue.Treeview",
+                       background="#ffffff",
+                       foreground="#0d47a1",
+                       fieldbackground="#ffffff",
+                       borderwidth=0,
+                       font=("Microsoft YaHei UI", 9))
+        style.configure("Blue.Treeview.Heading",
+                       background="#42a5f5",
+                       foreground="#ffffff",
+                       borderwidth=0,
+                       relief=tk.FLAT,
+                       font=("Microsoft YaHei UI", 9, "bold"))
+        style.map("Blue.Treeview",
+                 background=[('selected', '#2196f3')],
+                 foreground=[('selected', '#ffffff')])
+        style.map("Blue.Treeview.Heading",
+                 background=[('active', '#1976d2')])
+
+        columns = ('Filename', 'Reseller', 'City', 'Store Name', 'YearQuarter', 'Week', 'Status')
+        self.result_table = ttk.Treeview(result_panel, columns=columns, show='headings',
+                                        height=20, style="Blue.Treeview")
+        
+        # 设置列宽
+        column_widths = {
+            'Filename': 180,
+            'Reseller': 120,
+            'City': 100,
+            'Store Name': 150,
+            'YearQuarter': 100,
+            'Week': 80,
+            'Status': 120
+        }
+        
+        for col in columns:
+            self.result_table.heading(col, text=col)
+            self.result_table.column(col, width=column_widths[col])
+        
+        # 滚动条
+        scrollbar = ttk.Scrollbar(result_panel, orient='vertical', command=self.result_table.yview)
+        self.result_table.configure(yscrollcommand=scrollbar.set)
+        
+        # 双击查看完整内容
+        self.result_table.bind('<Double-Button-1>', self.view_full_content)
+        
+        # 打包
+        self.result_table.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+        scrollbar.pack(side='right', fill='y', pady=10, padx=(0, 10))
+
+        # 底部区域 - 浅蓝色背景
+        bottom_frame = tk.Frame(self.root, bg="#e3f2fd")
+        bottom_frame.pack(fill='x', padx=20, pady=(0, 15))
+
+        # 操作按钮 - 蓝色系
+        button_frame = tk.Frame(bottom_frame, bg="#e3f2fd")
+        button_frame.pack(fill='x', pady=(0, 10))
+
+        button_configs = [
+            ("📊 Statistics", self.view_statistics, "#42a5f5", "#1e88e5"),
+            ("💾 Save", self.save_results, "#66bb6a", "#43a047"),
+            ("🔄 Clear", self.clear_results, "#ef5350", "#e53935"),
+            ("🗑️ Clear File", self.clear_previous_file, "#ff9800", "#f57c00"),
+            ("❓ Help", self.show_help, "#78909c", "#546e7a")
+        ]
+
+        for text, command, bg_color, hover_color in button_configs:
+            btn = tk.Button(button_frame, text=text, command=command,
+                          font=("Microsoft YaHei UI", 9, "bold"), bg=bg_color, fg="#ffffff",
+                          relief=tk.FLAT, cursor="hand2", padx=15, pady=8, bd=0,
+                          activebackground=hover_color, activeforeground="#ffffff")
+            btn.pack(side='left', padx=5)
+            btn.bind("<Enter>", lambda e, b=btn, c=hover_color: b.config(bg=c))
+            btn.bind("<Leave>", lambda e, b=btn, c=bg_color: b.config(bg=c))
+
+        # 状态栏 - 蓝色系
+        self.status_bar = tk.Label(bottom_frame, text="Ready to start extraction",
+                                  bd=0, relief=tk.FLAT, anchor=tk.W,
+                                  bg="#bbdefb", fg="#0d47a1",
+                                  font=("Microsoft YaHei UI", 9), padx=15, pady=10)
+        self.status_bar.pack(fill='x', side='bottom')
+
+    def auto_fill_year_quarter(self):
+        """自动填充当前年份和季度"""
+        current_date = datetime.now()
+        self.year_var.set(str(current_date.year))
+        
+        current_month = current_date.month
+        if current_month in [1, 2, 3]:
+            self.quarter_var.set('Q1')
+        elif current_month in [4, 5, 6]:
+            self.quarter_var.set('Q2')
+        elif current_month in [7, 8, 9]:
+            self.quarter_var.set('Q3')
+        else:
+            self.quarter_var.set('Q4')
+
+    def select_folder(self):
+        """选择季度文件夹"""
+        folder_path = filedialog.askdirectory(title="Select Quarter folder containing W1-W13 subfolders")
+        if folder_path:
+            self.folder_path_var.set(folder_path)
+            self.status_bar.config(text=f"Quarter folder selected: {os.path.basename(folder_path)}")
+
+    def select_city_ranking_file(self):
+        """选择 City Ranking 文件"""
+        file_path = filedialog.askopenfilename(
+            title="Select City Ranking File",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.city_ranking_file_var.set(file_path)
+            self.city_ranking_file_path = file_path
+            self.status_bar.config(text=f"City ranking file loaded: {os.path.basename(file_path)}")
+
+    def select_reseller_list_file(self):
+        """选择 Reseller List 文件"""
+        file_path = filedialog.askopenfilename(
+            title="Select Reseller List File",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.reseller_list_file_var.set(file_path)
+            self.reseller_list_file_path = file_path
+            self.status_bar.config(text=f"Reseller list file loaded: {os.path.basename(file_path)}")
+
+    def select_previous_file(self):
+        """选择上一次的结果文件"""
+        file_path = filedialog.askopenfilename(
+            title="Select Previous Result File",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.prev_file_path_var.set(file_path)
+            self.previous_file_path = file_path
+            self.status_bar.config(text=f"Previous file loaded: {os.path.basename(file_path)}")
+
+    def clear_previous_file(self):
+        """清除已选择的上一次结果文件"""
+        self.prev_file_path_var.set("")
+        self.previous_file_path = None
+        self.status_bar.config(text="Previous file cleared")
+
+    def load_previous_data(self):
+        """加载上一次的数据"""
+        if not self.previous_file_path or not os.path.exists(self.previous_file_path):
+            return None
+
+        try:
+            # 读取上一次的结果文件
+            df_previous = pd.read_excel(self.previous_file_path)
+
+            # 转换为字典列表格式以保持一致性
+            previous_data = df_previous.to_dict('records')
+
+            # 更新处理时间
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            for item in previous_data:
+                item['ProcessingTime'] = current_time
+
+            self.status_bar.config(text=f"Loaded {len(previous_data)} records from previous file")
+            return previous_data
+        except Exception as e:
+            messagebox.showwarning("Warning", f"Failed to load previous file: {str(e)}")
+            return None
+
+    def merge_data(self, new_data, previous_data):
+        """合并新旧数据，去除重复"""
+        if previous_data is None:
+            return new_data
+
+        # 合并数据
+        merged_data = previous_data + new_data
+
+        # 去除可能的重复记录（基于Filename）
+        seen = set()
+        unique_data = []
+
+        for item in merged_data:
+            key = item.get('Filename', '')
+            if key not in seen:
+                seen.add(key)
+                unique_data.append(item)
+
+        self.status_bar.config(
+            text=f"Merged: {len(previous_data)} previous + {len(new_data)} new = {len(unique_data)} total")
+        return unique_data
+
+    def start_extraction(self):
+        """开始提取数据"""
+        quarter_folder_path = self.folder_path_var.get()
+
+        if not quarter_folder_path or not os.path.exists(quarter_folder_path):
+            messagebox.showwarning("Warning", "Please select a valid quarter folder path")
+            return
+
+        # 检查必需的文件
+        if not self.city_ranking_file_path or not os.path.exists(self.city_ranking_file_path):
+            messagebox.showwarning("Warning", "Please select City Ranking file")
+            return
+
+        if not self.reseller_list_file_path or not os.path.exists(self.reseller_list_file_path):
+            messagebox.showwarning("Warning", "Please select Reseller List file")
+            return
+
+        year = self.year_var.get()
+        quarter = self.quarter_var.get()
+
+        if not year or not quarter:
+            messagebox.showwarning("Warning", "Please enter year and quarter information")
+            return
+
+        self.clear_results()
+
+        # 创建 extractor 实例，传入文件路径
+        self.extractor = CostTrackerExtractor(
+            city_ranking_path=self.city_ranking_file_path,
+            reseller_list_path=self.reseller_list_file_path
+        )
+
+        # 检查是否有上一次结果文件
+        previous_data = None
+        if self.previous_file_path:
+            self.status_bar.config(text=f"Loading previous data and extracting quarter {year}{quarter}...")
+            previous_data = self.load_previous_data()
+        else:
+            self.status_bar.config(text=f"Extracting quarter {year}{quarter}...")
+
+        self.root.update()
+
+        try:
+            # 使用季度文件夹处理方法
+            all_data, summary_info = self.extractor.batch_process_quarter_folder(quarter_folder_path, year, quarter)
+
+            if not all_data:
+                messagebox.showinfo("Info", "No data extracted")
+                self.status_bar.config(text="Extraction completed, no data")
+                return
+
+            # 如果有上一次数据，合并
+            if previous_data is not None:
+                all_data = self.merge_data(all_data, previous_data)
+
+            self.display_results(all_data)
+            self.all_data = all_data
+            self.summary_info = summary_info
+
+            self.display_summary_info(summary_info)
+
+            # 更新状态栏信息
+            if previous_data is not None:
+                self.status_bar.config(
+                    text=f"Extraction completed! Processed {summary_info['SuccessFiles']}/{summary_info['TotalFiles']} files, merged with previous data")
+            else:
+                self.status_bar.config(
+                    text=f"Extraction completed! Successfully processed {summary_info['SuccessFiles']}/{summary_info['TotalFiles']} files across {summary_info['WeeksProcessed']} weeks")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Error during extraction:\n{str(e)}")
+            self.status_bar.config(text="Extraction failed")
+            import traceback
+            traceback.print_exc()
+
+    def display_results(self, all_data):
+        """显示结果到表格"""
+        for data_row in all_data:
+            self.result_table.insert('', 'end', values=(
+                data_row.get('Filename', ''),
+                data_row.get('Reseller name', ''),
+                data_row.get('City', ''),
+                data_row.get('Store name', ''),
+                data_row.get('YearQuarter', ''),
+                data_row.get('Week', ''),
+                data_row.get('Status', '')
+            ))
+
+    def view_full_content(self, event):
+        """查看完整内容"""
+        selected_items = self.result_table.selection()
+        if not selected_items:
+            return
+        
+        values = self.result_table.item(selected_items[0])['values']
+        filename = values[0]
+        
+        # 查找对应的数据行
+        for data_row in self.all_data:
+            if data_row.get('Filename') == filename:
+                self.show_detail_window(data_row)
+                break
+
+    def show_detail_window(self, data_row):
+        """显示详细信息窗口"""
+        detail_window = tk.Toplevel(self.root)
+        detail_window.title(f"Detail - {data_row.get('Filename', '')}")
+        detail_window.geometry("1000x700")
+        detail_window.configure(bg="#e3f2fd")
+
+        # 标题 - 蓝色
+        header_frame = tk.Frame(detail_window, bg="#1976d2", height=60)
+        header_frame.pack(fill='x')
+        header_frame.pack_propagate(False)
+
+        tk.Label(header_frame, text=f"📄 {data_row.get('Filename', '')}",
+                 font=("Microsoft YaHei UI", 13, "bold"), fg="#ffffff", bg="#1976d2").pack(pady=15)
+
+        # 内容区域 - 白色背景
+        content_frame = tk.Frame(detail_window, bg="#ffffff", relief=tk.FLAT, bd=0)
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # 创建滚动文本框显示所有字段
+        detail_text = scrolledtext.ScrolledText(content_frame, width=120, height=35,
+                                                font=("Consolas", 9), bg="#e3f2fd",
+                                                fg="#0d47a1", relief=tk.FLAT, padx=15, pady=15)
+        detail_text.pack(padx=10, pady=10, fill='both', expand=True)
+        
+        # 格式化显示所有字段
+        detail_content = "=" * 80 + "\n"
+        detail_content += "BRIEF COST TRACKER CASE DATA - DETAILED VIEW\n"
+        detail_content += "=" * 80 + "\n\n"
+        
+        # 按照完整字段列表的顺序显示
+        field_order = [
+            'RTM Level 4', 'APR or APP', 'RTM#', 'Self-fund', 'Review date', 'New/Refit',
+            'Status', 'Comments', 'HQ ID', 'Case No.', 'Apple ID', 'SFOID/工单编号',
+            'Appoint date', 'Reseller name', 'Store name', 'City', 'City rank', 'City Tier',
+            'Appointed week', 'Mall sales (RMB Bn)', 'Mall size (sqm)', 'Mall sales / sqm (RMB)',
+            'Store size', 'Year 1 Traffic', 'Year 1 CPU ST/week', 'Year 1 iPod /AirPodsST/week',
+            'Year 1 iPhone ST/week', 'Year 1 iPad ST/week', 'Year 1 Watch ST/week',
+            'Year 1 third Party % of total revenue', 'Year 1 Apple Rev (USD)', 'Year 1 ST$ (USD)',
+            'Year 1 Total Revenue (USD)', 'Total Revenue in RMB/Month', 'Year 1 gross profit (USD)',
+            'Year 1 gross margin %', 'Year 1 total expenses (USD)', 'Year 1 total revised expenses (USD)',
+            'Credit card cost as % of revenue', 'Year 1 BE Revenue (USD/year)',
+            'Year 1 BE Revenue (RMB/month)', 'Year 1 net income (USD)', 'Year 1 net income %',
+            'Rent/ month excl. utilities from Reseller (LC)', 'Rent/sqm/day (LC)',
+            'Biz plan property cost/year incl. utilities (USD)', 'Property cost/sqm/yr',
+            'Utilities as % of rent cost', 'Property cost incl. utilities as % of total rev.',
+            'Total staff cost (USD)', 'Staff cost as % of revenue', 'No. of staff',
+            'Avg. montly Cost/staff (LC)', 'Showroom staff as % of total staff cost',
+            'SFF ($)', 'SLF ($)', 'Trafic Counter ($)',
+            'ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)', 'EBITDA', 'Payback Period',
+            'CY', 'Financial Risk', 'Risk Comment', 'HQ Burden cost as % of revenue'
+        ]
+        
+        for i, field in enumerate(field_order, 1):
+            value = data_row.get(field, '')
+            # 格式化数字
+            if isinstance(value, float):
+                value = f"{value:,.2f}"
+            detail_content += f"{i:2d}. {field:50s}: {value}\n"
+        
+        detail_content += "\n" + "=" * 80 + "\n"
+        detail_content += "METADATA\n"
+        detail_content += "=" * 80 + "\n"
+        detail_content += f"Filename: {data_row.get('Filename', '')}\n"
+        detail_content += f"Year: {data_row.get('Year', '')}\n"
+        detail_content += f"Quarter: {data_row.get('Quarter', '')}\n"
+        detail_content += f"Week: {data_row.get('Week', '')}\n"
+        detail_content += f"Processing Time: {data_row.get('ProcessingTime', '')}\n"
+
+        detail_text.insert(1.0, detail_content)
+        detail_text.config(state='disabled')
+
+        # 关闭按钮 - 蓝色
+        btn_frame = tk.Frame(detail_window, bg="#e3f2fd")
+        btn_frame.pack(fill='x', padx=20, pady=(0, 20))
+
+        close_btn = tk.Button(btn_frame, text="✖️ Close",
+                             command=detail_window.destroy,
+                             font=("Microsoft YaHei UI", 10, "bold"), bg="#2196f3", fg="#ffffff",
+                             relief=tk.FLAT, cursor="hand2", padx=30, pady=10, bd=0,
+                             activebackground="#1976d2", activeforeground="#ffffff")
+        close_btn.pack()
+        close_btn.bind("<Enter>", lambda e: close_btn.config(bg="#1976d2"))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(bg="#2196f3"))
+
+    def save_results(self):
+        """保存结果到Excel"""
+        if not hasattr(self, 'all_data') or not self.all_data:
+            messagebox.showwarning("Warning", "No data to save, please extract data first")
+            return
+        
+        # 确定默认文件名
+        year = self.year_var.get()
+        quarter = self.quarter_var.get()
+        default_name = f"CostTracker_{year}{quarter}_Result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        output_file = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+            initialfile=default_name
+        )
+        
+        if not output_file:
+            return
+        
+        try:
+            # 转换为DataFrame
+            df = pd.DataFrame(self.all_data)
+            
+            # 定义完整列顺序（64个字段 + 元数据）
+            column_order = [
+                'RTM Level 4', 'APR or APP', 'RTM#', 'Self-fund', 'Review date', 'New/Refit',
+                'Status', 'Comments', 'HQ ID', 'Case No.', 'Apple ID', 'SFOID/工单编号',
+                'Appoint date', 'Reseller name', 'Store name', 'City', 'City rank', 'City Tier',
+                'Appointed week', 'Mall sales (RMB Bn)', 'Mall size (sqm)', 'Mall sales / sqm (RMB)',
+                'Store size', 'Year 1 Traffic', 'Year 1 CPU ST/week', 'Year 1 iPod /AirPodsST/week',
+                'Year 1 iPhone ST/week', 'Year 1 iPad ST/week', 'Year 1 Watch ST/week',
+                'Year 1 third Party % of total revenue', 'Year 1 Apple Rev (USD)', 'Year 1 ST$ (USD)',
+                'Year 1 Total Revenue (USD)', 'Total Revenue in RMB/Month', 'Year 1 gross profit (USD)',
+                'Year 1 gross margin %', 'Year 1 total expenses (USD)', 'Year 1 total revised expenses (USD)',
+                'Credit card cost as % of revenue', 'Year 1 BE Revenue (USD/year)',
+                'Year 1 BE Revenue (RMB/month)', 'Year 1 net income (USD)', 'Year 1 net income %',
+                'Rent/ month excl. utilities from Reseller (LC)', 'Rent/sqm/day (LC)',
+                'Biz plan property cost/year incl. utilities (USD)', 'Property cost/sqm/yr',
+                'Utilities as % of rent cost', 'Property cost incl. utilities as % of total rev.',
+                'Total staff cost (USD)', 'Staff cost as % of revenue', 'No. of staff',
+                'Avg. montly Cost/staff (LC)', 'Showroom staff as % of total staff cost',
+                'SFF ($)', 'SLF ($)', 'Trafic Counter ($)',
+                'ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)', 'EBITDA', 'Payback Period',
+                'CY', 'Financial Risk', 'Risk Comment', 'HQ Burden cost as % of revenue',
+                'Filename', 'Year', 'Quarter', 'Week', 'YearQuarter', 'ProcessingTime'
+            ]
+            
+            # 确保所有列都存在
+            existing_columns = [col for col in column_order if col in df.columns]
+            df_display = df[existing_columns]
+            
+            # 保存到Excel
+            df_display.to_excel(output_file, index=False, sheet_name='Cost Tracker Data')
+            
+            self.output_file_path = output_file
+
+            success_msg = f"Data saved to:\n{output_file}\n\n"
+            success_msg += f"✓ Saved {len(df_display)} records\n"
+            success_msg += f"✓ Processed {self.summary_info.get('WeeksProcessed', '?')} weeks\n"
+            success_msg += f"✓ Total fields: 64 + metadata\n"
+
+            if hasattr(self, 'previous_file_path') and self.previous_file_path:
+                success_msg += f"✓ Merged with previous file: {os.path.basename(self.previous_file_path)}\n"
+            else:
+                success_msg += "✓ Created new result file\n"
+
+            messagebox.showinfo("Save Successful", success_msg)
+            
+            # 询问是否立即打开结果文件
+            if messagebox.askyesno("Open File", "Open the result file now?"):
+                try:
+                    if os.name == 'nt':
+                        os.startfile(output_file)
+                    elif os.name == 'posix':
+                        import subprocess
+                        subprocess.call(['open', output_file])
+                except Exception as e:
+                    messagebox.showwarning("Cannot Open", f"Cannot auto-open file: {e}")
+        
+        except Exception as e:
+            messagebox.showerror("Save Failed", f"Error saving file:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def display_summary_info(self, summary_info):
+        """显示汇总信息"""
+        summary_window = tk.Toplevel(self.root)
+        summary_window.title("Extraction Summary Report")
+        summary_window.geometry("800x650")
+        summary_window.configure(bg="#e3f2fd")
+
+        # 标题 - 蓝色
+        header_frame = tk.Frame(summary_window, bg="#1976d2", height=70)
+        header_frame.pack(fill='x')
+        header_frame.pack_propagate(False)
+
+        tk.Label(header_frame, text="📊 Extraction Summary Report",
+                 font=("Microsoft YaHei UI", 15, "bold"), fg="#ffffff", bg="#1976d2").pack(pady=10)
+        tk.Label(header_frame, text="Cost Tracker Data Builder v1.0",
+                 font=("Microsoft YaHei UI", 9), fg="#bbdefb", bg="#1976d2").pack()
+
+        # 内容区域 - 白色背景
+        content_frame = tk.Frame(summary_window, bg="#ffffff", relief=tk.FLAT, bd=0)
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        summary_text = scrolledtext.ScrolledText(content_frame, width=90, height=32,
+                                                font=("Consolas", 9), bg="#e3f2fd",
+                                                fg="#0d47a1", relief=tk.FLAT, padx=15, pady=15)
+        summary_text.pack(padx=10, pady=10, fill='both', expand=True)
+        
+        summary_content = f"Extraction Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        summary_content += "=" * 70 + "\n\n"
+        
+        summary_content += f"📁 Quarter Folder:\n"
+        summary_content += f"  {summary_info['SearchFolder']}\n\n"
+        
+        summary_content += f"📅 Quarter Information:\n"
+        summary_content += f"  Year: {summary_info['Year']}\n"
+        summary_content += f"  Quarter: {summary_info['Quarter']}\n"
+        summary_content += f"  Year-Quarter: {summary_info['Year']}{summary_info['Quarter']}\n"
+        summary_content += f"  Weeks Processed: {summary_info['WeeksProcessed']}\n\n"
+        
+        summary_content += f"📊 Week-by-Week Statistics:\n"
+        summary_content += "  " + "-" * 40 + "\n"
+        for week_stat in summary_info.get('WeekStats', []):
+            summary_content += f"  {week_stat['Week']} ({week_stat['Folder']}):\n"
+            summary_content += f"    Files: {week_stat['SuccessFiles']}/{week_stat['ExcelFiles']} successful\n"
+            summary_content += f"    Records: {week_stat['Records']}\n"
+        summary_content += "\n"
+        
+        summary_content += f"📁 Overall File Statistics:\n"
+        summary_content += f"  Total Excel Files: {summary_info['TotalFiles']}\n"
+        summary_content += f"  Success Files: {summary_info['SuccessFiles']}\n"
+        summary_content += f"  Failed Files: {summary_info['FailedFiles']}\n\n"
+        
+        summary_content += f"📝 Record Statistics:\n"
+        summary_content += f"  Total Records: {summary_info['TotalRecords']}\n"
+        summary_content += f"  Fields per Record: 50 + metadata\n\n"
+        
+        if summary_info['FailedFileList']:
+            summary_content += f"❌ Failed File List (Top 10):\n"
+            for i, (filename, error_info) in enumerate(summary_info['FailedFileList'][:10], 1):
+                summary_content += f"  {i}. {filename}: {error_info}\n"
+            
+            if len(summary_info['FailedFileList']) > 10:
+                summary_content += f"  ... and {len(summary_info['FailedFileList']) - 10} more files\n"
+
+        summary_text.insert(1.0, summary_content)
+        summary_text.config(state='disabled')
+
+        # 关闭按钮 - 蓝色
+        btn_frame = tk.Frame(summary_window, bg="#e3f2fd")
+        btn_frame.pack(fill='x', padx=20, pady=(0, 20))
+
+        close_btn = tk.Button(btn_frame, text="✖️ Close",
+                             command=summary_window.destroy,
+                             font=("Microsoft YaHei UI", 10, "bold"), bg="#2196f3", fg="#ffffff",
+                             relief=tk.FLAT, cursor="hand2", padx=30, pady=10, bd=0,
+                             activebackground="#1976d2", activeforeground="#ffffff")
+        close_btn.pack()
+        close_btn.bind("<Enter>", lambda e: close_btn.config(bg="#1976d2"))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(bg="#2196f3"))
+
+    def view_statistics(self):
+        """查看统计信息"""
+        all_items = self.result_table.get_children()
+
+        if not all_items:
+            messagebox.showinfo("Statistics", "No data currently")
+            return
+
+        city_stats = {}
+        reseller_stats = {}
+        week_stats = {}
+
+        for item in all_items:
+            values = self.result_table.item(item)['values']
+            reseller = values[1]
+            city = values[2]
+            week = values[5]
+
+            city_stats[city] = city_stats.get(city, 0) + 1
+            reseller_stats[reseller] = reseller_stats.get(reseller, 0) + 1
+            week_stats[week] = week_stats.get(week, 0) + 1
+
+        stats_window = tk.Toplevel(self.root)
+        stats_window.title("Data Statistics")
+        stats_window.geometry("650x550")
+        stats_window.configure(bg="#e3f2fd")
+
+        # 标题 - 蓝色
+        header_frame = tk.Frame(stats_window, bg="#1976d2", height=70)
+        header_frame.pack(fill='x')
+        header_frame.pack_propagate(False)
+
+        tk.Label(header_frame, text="📈 Data Statistics",
+                 font=("Microsoft YaHei UI", 15, "bold"), fg="#ffffff", bg="#1976d2").pack(pady=10)
+        tk.Label(header_frame, text=f"Total Records: {len(all_items)}",
+                 font=("Microsoft YaHei UI", 9), fg="#bbdefb", bg="#1976d2").pack()
+
+        # 内容区域 - 白色背景
+        content_frame = tk.Frame(stats_window, bg="#ffffff", relief=tk.FLAT, bd=0)
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        stats_text = scrolledtext.ScrolledText(content_frame, width=70, height=25,
+                                              font=("Consolas", 9), bg="#e3f2fd",
+                                              fg="#0d47a1", relief=tk.FLAT, padx=15, pady=15)
+        stats_text.pack(padx=10, pady=10, fill='both', expand=True)
+
+        stats_content = f"Total Records: {len(all_items)}\n\n"
+
+        stats_content += "📆 Week Distribution:\n"
+        for week, count in sorted(week_stats.items(), key=lambda x: x[1], reverse=True):
+            stats_content += f"  {week}: {count} records\n"
+
+        stats_content += "\n🏙️ City Distribution:\n"
+        for city, count in sorted(city_stats.items(), key=lambda x: x[1], reverse=True):
+            stats_content += f"  {city}: {count} records\n"
+
+        stats_content += "\n👥 Reseller Distribution (Top 10):\n"
+        for reseller, count in sorted(reseller_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
+            stats_content += f"  {reseller}: {count} records\n"
+
+        stats_text.insert(1.0, stats_content)
+        stats_text.config(state='disabled')
+
+        # 关闭按钮 - 蓝色
+        btn_frame = tk.Frame(stats_window, bg="#e3f2fd")
+        btn_frame.pack(fill='x', padx=20, pady=(0, 20))
+
+        close_btn = tk.Button(btn_frame, text="✖️ Close",
+                             command=stats_window.destroy,
+                             font=("Microsoft YaHei UI", 10, "bold"), bg="#2196f3", fg="#ffffff",
+                             relief=tk.FLAT, cursor="hand2", padx=30, pady=10, bd=0,
+                             activebackground="#1976d2", activeforeground="#ffffff")
+        close_btn.pack()
+        close_btn.bind("<Enter>", lambda e: close_btn.config(bg="#1976d2"))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(bg="#2196f3"))
+
+    def clear_results(self):
+        """清除结果"""
+        for item in self.result_table.get_children():
+            self.result_table.delete(item)
+
+        self.all_data = []
+        self.status_bar.config(text="Results cleared")
+
+    def show_help(self):
+        """显示帮助信息"""
+        help_text = """
+        Brief Cost Tracker Case Data Builder v1.0
+
+        Usage Instructions:
+
+        1. Select Quarter folder containing W1-W13 subfolders
+        2. Select Year and Quarter information
+        3. (Optional) Upload previous result file to append new data
+        4. Click "Start Extraction" button to process
+        5. View extraction results in the table
+        6. Double-click any row to view detailed 50-field data
+        7. Click "Save Results" to save data to Excel
+
+        Required Files:
+        - city ranking.xlsx (in same directory as script)
+        - Reseller list_FY26Q1W13.xlsx (in same directory as script)
+
+        Folder Structure Requirement:
+        Quarter Folder/
+        ├── W1/          (Week 1 folder)
+        │   ├── APR_xxx.xlsx
+        │   └── ...
+        ├── W2/          (Week 2 folder)
+        ├── ...
+        └── W13/         (Week 13 folder)
+
+        Features:
+        - Extracts 50 fields from each Excel file
+        - VLOOKUP functionality for City Rank and RTM Level 4
+        - Automatic file name parsing for Case No. and SFOID
+        - Processes entire quarter folder structure
+        - Week-by-week statistics
+        - Merge with previous result files (duplicates removed by Filename)
+
+        Note:
+        - Week folders must be named W1, W2, ..., W13
+        - Each week folder should contain Excel files (APR or APP files)
+        - Program will automatically detect week number from folder name
+        - When merging, duplicate files (same Filename) will be skipped
+        """
+
+        messagebox.showinfo("Help", help_text)
+
+    def run(self):
+        """运行主循环"""
+        self.root.mainloop()
+
+
+def main():
+    print("=" * 60)
+    print("    Brief Cost Tracker Case Data Builder v1.0")
+    print("=" * 60)
+    print("Features:")
+    print("  - Extracts 50 fields from Excel files")
+    print("  - VLOOKUP for City Rank and RTM Level 4")
+    print("  - Automatic quarter folder processing")
+    print("  - Week detection from folder names (W1-W13)")
+    print("  - Process entire quarter in one operation")
+    print("")
+    print("Required Files:")
+    print("  - city ranking.xlsx")
+    print("  - Reseller list_FY26Q1W13.xlsx")
+    print("=" * 60)
+
+    try:
+        import pandas as pd
+    except ImportError as e:
+        print(f"Missing dependency: {e}")
+        print("Please install required libraries: pip install pandas openpyxl")
+        input("Press Enter to exit...")
+        return
+
+    interface = CostTrackerInterface()
+    interface.run()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"Program error: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")
