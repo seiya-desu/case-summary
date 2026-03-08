@@ -7,7 +7,7 @@ import pandas as pd
 from openpyxl import load_workbook
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
-from datetime import datetime
+from datetime import datetime, timedelta, date
 
 
 class CostTrackerExtractor:
@@ -20,7 +20,7 @@ class CostTrackerExtractor:
         self.load_lookup_files()
 
     def load_lookup_files(self):
-        """加载辅助文件"""
+        """辅助文件"""
         try:
             if self.city_ranking_path and os.path.exists(self.city_ranking_path):
                 self.city_ranking_df = pd.read_excel(self.city_ranking_path)
@@ -40,65 +40,66 @@ class CostTrackerExtractor:
             traceback.print_exc()
 
     def vlookup_city_rank(self, city_name):
-        """查找City Rank"""
+        """City Rank"""
         if self.city_ranking_df is None or city_name is None or city_name == "":
             return "Unknown"
 
         try:
             city_name_clean = str(city_name).strip().lower()
-            city_col = self.city_ranking_df.columns[0]
-            rank_col = self.city_ranking_df.columns[1] if len(self.city_ranking_df.columns) > 1 else self.city_ranking_df.columns[0]
 
-            for idx, row in self.city_ranking_df.iterrows():
-                df_city = str(row[city_col]).strip().lower()
-                if df_city == city_name_clean:
-                    return row[rank_col]
+            df = self.city_ranking_df.iloc[1:]
 
-            return "Unknown"
+            result = None
+            for idx, row in df.iterrows():
+                city_f = str(row.iloc[5]).strip().lower()  # F列
+                if city_f == city_name_clean:
+                    result = row.iloc[7]  # H列
+                    break
+
+            if result is None or result == 0 or result == "":
+                for idx, row in df.iterrows():
+                    city_m = str(row.iloc[12]).strip().lower()  # M列
+                    if city_m == city_name_clean:
+                        result = row.iloc[13]  # N列
+                        break
+
+            if result is None or result == "" or result == 0:
+                print(f"[Warning] City rank not found for: '{city_name}'")
+                return "Unknown"
+
+            print(f"[OK] City rank found for '{city_name}': {result}")
+            return result
+
         except Exception as e:
             print(f"[ERROR] Error in vlookup_city_rank for '{city_name}': {str(e)}")
+            import traceback
+            traceback.print_exc()
             return "Unknown"
 
-    def vlookup_rtm_level4(self, reseller_name):
-        """模拟VLOOKUP查找RTM Level 4"""
-        if self.reseller_list_df is None or reseller_name is None or reseller_name == "":
-            print(f"[DEBUG] RTM Level 4 lookup skipped - DataFrame is None or reseller_name is empty")
+    def vlookup_rtm_level4(self, hq_id):
+        """RTM Level 4 -HQ ID"""
+        if self.reseller_list_df is None or hq_id is None or hq_id == "":
             return ""
 
         try:
-            # 清理经销商名称 - 去除前后空格并转为字符串
-            reseller_name_clean = str(reseller_name).strip()
+            hq_id_clean = str(hq_id).strip()
 
-            # 假设第一列是Reseller Name，第7列（索引6）是RTM Level 4
-            reseller_col = self.reseller_list_df.columns[0]
+            # A列是 Reseller HQ ID，G列是 RTM
+            hq_id_col = self.reseller_list_df.columns[0]  
+            rtm_col = self.reseller_list_df.columns[6]     
 
-            # 检查是否有第7列
-            if len(self.reseller_list_df.columns) < 7:
-                print(f"[ERROR] Reseller list has only {len(self.reseller_list_df.columns)} columns, need at least 7")
-                return ""
-
-            rtm_col = self.reseller_list_df.columns[6]  # 第7列（索引6）
-
-            # 遍历DataFrame进行匹配
             for idx, row in self.reseller_list_df.iterrows():
-                df_reseller = str(row[reseller_col]).strip()
-
-                # 精确匹配（不区分大小写）
-                if df_reseller.lower() == reseller_name_clean.lower():
+                df_hq_id = str(row[hq_id_col]).strip()
+                if df_hq_id == hq_id_clean:
                     rtm_value = row[rtm_col]
-                    print(f"[DEBUG] RTM Level 4 found for '{reseller_name_clean}': '{rtm_value}'")
+                    print(f"[OK] RTM Level 4 found for HQ ID '{hq_id_clean}': '{rtm_value}'")
                     return rtm_value
 
-            # 如果没找到，打印调试信息
-            print(f"[DEBUG] RTM Level 4 NOT found for: '{reseller_name_clean}'")
-            # 打印前5个经销商名称供参考
-            if len(self.reseller_list_df) > 0:
-                sample_names = [str(self.reseller_list_df.iloc[i, 0]).strip() for i in range(min(5, len(self.reseller_list_df)))]
-                print(f"[DEBUG] Sample reseller names in list: {sample_names}")
-
+            print(f"[Warning] RTM Level 4 not found for HQ ID: '{hq_id_clean}'")
             return ""
+
         except Exception as e:
-            print(f"[ERROR] Error in vlookup_rtm_level4 for '{reseller_name}': {str(e)}")
+            print(f"[ERROR] Error in vlookup_rtm_level4 for HQ ID '{hq_id}': {str(e)}")
             import traceback
             traceback.print_exc()
             return ""
@@ -121,14 +122,12 @@ class CostTrackerExtractor:
     def extract_sfoid_from_filename(self, folder_name):
         """从文件夹名称中提取SFOID，例如 '...(FY260010740)' 提取 'FY260010740'"""
         try:
-            # 匹配最后一个括号中以FY开头的内容
             match = re.search(r'\((FY\d+)\)$', folder_name)
             if match:
                 sfoid = match.group(1)
                 print(f"[DEBUG] Extracted SFOID: '{sfoid}' from folder: '{folder_name}'")
                 return sfoid
 
-            # 如果没找到FY开头的，尝试匹配最后括号中的任意内容
             match = re.search(r'\(([^)]+)\)$', folder_name)
             if match:
                 sfoid = match.group(1)
@@ -142,7 +141,7 @@ class CostTrackerExtractor:
             return ""
 
     def safe_read_cell(self, sheet, cell_ref, default=0):
-        """安全读取单元格值，如果为None则返回默认值"""
+        """读取单元格值"""
         try:
             value = sheet[cell_ref].value
             if value is None:
@@ -166,7 +165,7 @@ class CostTrackerExtractor:
             return default
 
     def safe_divide(self, numerator, denominator, default=0):
-        """安全除法，避免除以0"""
+        """安全除法"""
         try:
             if denominator == 0 or denominator is None:
                 return default
@@ -174,14 +173,114 @@ class CostTrackerExtractor:
         except:
             return default
 
+    def extract_review_date_from_week_folder(self, file_path):
+        """从周文件夹名称提取日期，例如 W1-20251230 -> 30-Dec-25"""
+        try:
+            week_folder = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
+
+            # 支持 W1-20251230 / W1_20251230 / W1 20251230 等格式
+            match = re.search(r'W\d{1,2}[-_\s]?(\d{8})', week_folder, re.IGNORECASE)
+            if match:
+                dt = datetime.strptime(match.group(1), '%Y%m%d')
+                review_date = dt.strftime('%d-%b-%y')
+                print(f"[DEBUG] Review date extracted from week folder '{week_folder}': {review_date}")
+                return review_date
+
+            # 兜底：若周文件夹里有任意连续8位日期，也尝试解析
+            generic_match = re.search(r'(\d{8})', week_folder)
+            if generic_match:
+                dt = datetime.strptime(generic_match.group(1), '%Y%m%d')
+                review_date = dt.strftime('%d-%b-%y')
+                print(f"[DEBUG] Review date extracted from generic date in '{week_folder}': {review_date}")
+                return review_date
+
+        except Exception as e:
+            print(f"[Warning] Failed to parse review date from week folder: {str(e)}")
+
+        fallback = datetime.now().strftime('%d-%b-%y')
+        print(f"[Warning] Week folder date not found, fallback to current date: {fallback}")
+        return fallback
+
+    def _format_review_date(self, raw_value):
+        """将不同类型的日期值统一格式化为 DD-Mon-YY，失败返回空字符串"""
+        if raw_value is None:
+            return ""
+
+        # datetime/date 直接格式化
+        if isinstance(raw_value, datetime):
+            return raw_value.strftime('%d-%b-%y')
+        if isinstance(raw_value, date):
+            return datetime(raw_value.year, raw_value.month, raw_value.day).strftime('%d-%b-%y')
+
+        # Excel serial date (兼容被读成数字的情况)
+        if isinstance(raw_value, (int, float)):
+            if 20000 <= float(raw_value) <= 60000:
+                try:
+                    dt = datetime(1899, 12, 30) + timedelta(days=float(raw_value))
+                    return dt.strftime('%d-%b-%y')
+                except Exception:
+                    return ""
+            return ""
+
+        if isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                return ""
+
+            # 常见日期格式兜底
+            date_formats = [
+                '%d-%b-%y', '%d-%b-%Y', '%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d', '%Y/%m/%d',
+                '%m/%d/%Y', '%m/%d/%y', '%d.%m.%Y', '%d.%m.%y', '%d %b %Y', '%d %b %y'
+            ]
+            for fmt in date_formats:
+                try:
+                    return datetime.strptime(text, fmt).strftime('%d-%b-%y')
+                except ValueError:
+                    continue
+
+            # 字符串里带时间时尝试截断
+            short_text = text.split(' ')[0]
+            for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%d/%m/%Y', '%m/%d/%Y']:
+                try:
+                    return datetime.strptime(short_text, fmt).strftime('%d-%b-%y')
+                except ValueError:
+                    continue
+
+        return ""
+
+    def extract_review_date(self, ws_input):
+        """优先读取 E13/E14/J13/J14，再扫描 E/J 列，找不到返回 0"""
+        # 1) 先按固定候选格查找（13/14 行）
+        primary_cells = ['E13', 'E14', 'J13', 'J14']
+        for cell_ref in primary_cells:
+            raw = ws_input[cell_ref].value
+            parsed = self._format_review_date(raw)
+            if parsed:
+                print(f"[DEBUG] Review date found at {cell_ref}: {parsed}")
+                return parsed
+
+        # 2) 扫描 E/J 整列
+        max_row = ws_input.max_row if ws_input.max_row and ws_input.max_row > 0 else 200
+        for col in ['E', 'J']:
+            for r in range(1, max_row + 1):
+                parsed = self._format_review_date(ws_input[f'{col}{r}'].value)
+                if parsed:
+                    print(f"[DEBUG] Review date found in column {col}{r}: {parsed}")
+                    return parsed
+
+        # 3) 最后兜底
+        fallback = datetime.now().strftime('%d-%b-%y')
+        print(f"[Warning] Review date not found in E/J target cells, fallback to current date: {fallback}")
+        return fallback
+
     def process_single_file(self, file_path, year=None, quarter=None, week=None):
         """
-        处理单个Excel文件，提取50个字段的数据
+        提取50个字段的数据
         """
         try:
             filename = os.path.basename(file_path)
 
-            # 获取父文件夹名称（用于提取 Case No. 和 SFOID）
+            # 获取父文件夹名称
             parent_folder = os.path.basename(os.path.dirname(file_path))
             print(f"[DEBUG] Processing file: {filename}")
             print(f"[DEBUG] Parent folder: {parent_folder}")
@@ -216,12 +315,11 @@ class CostTrackerExtractor:
                 elif 'partner p&l' in name.lower() and 'local' in name.lower():
                     ws_pnl_local = wb[name]
 
-            # 开始提取数据
             data_row = {}
 
-            # 1. RTM Level 4
-            reseller_name = self.safe_read_cell(ws_input, 'D13', "")
-            data_row['RTM Level 4'] = self.vlookup_rtm_level4(reseller_name)
+            # 1. RTM Level 4 - 使用HQ ID查找
+            hq_id = self.safe_read_cell(ws_input, 'D14', "")
+            data_row['RTM Level 4'] = self.vlookup_rtm_level4(hq_id)
 
             # 2. APR or APP
             data_row['APR or APP'] = self.safe_read_cell(ws_input, 'M26', "")
@@ -232,25 +330,25 @@ class CostTrackerExtractor:
             # 4. Self-fund
             data_row['Self-fund'] = ""
 
-            # 5. Review date - 使用当前程序运行日期
-            data_row['Review date'] = datetime.now().strftime('%Y-%m-%d')
-            
+            # 5. Review date - 从周文件夹名称提取日期（如 W1-20251230）
+            data_row['Review date'] = self.extract_review_date_from_week_folder(file_path)
+
             # 6. New/Refit
             data_row['New/Refit'] = self.safe_read_cell(ws_input, 'I22', "")
-            
+
             # 7. Status
             data_row['Status'] = "WW approved"
-            
+
             # 8. Comments
             data_row['Comments'] = ""
-            
+
             # 9. HQ ID
-            data_row['HQ ID'] = self.safe_read_cell(ws_input, 'D14', "")
+            data_row['HQ ID'] = hq_id  
 
             # 10. Case No. - 从父文件夹名称提取
             data_row['Case No.'] = self.extract_case_no_from_filename(parent_folder)
 
-            # 11. Apple ID - 增强提取逻辑
+            # 11. Apple ID 
             apple_id = self.safe_read_cell(ws_input, 'D17', "")
 
             # 如果D17为空，尝试读取周围单元格作为fallback
@@ -269,7 +367,7 @@ class CostTrackerExtractor:
 
                 if not apple_id or str(apple_id).strip() == "":
                     print(f"[DEBUG] Apple ID not found in D17 or fallback cells")
-                    # 打印D17单元格的详细信息
+
                     d17_cell = ws_input['D17']
                     print(f"[DEBUG] D17 cell details - value: {d17_cell.value}, data_type: {d17_cell.data_type}")
             else:
@@ -277,13 +375,14 @@ class CostTrackerExtractor:
 
             data_row['Apple ID'] = apple_id
 
-            # 12. SFOID/工单编号 - 从父文件夹名称提取
+            # 12. SFOID/工单编号 
             data_row['SFOID/工单编号'] = self.extract_sfoid_from_filename(parent_folder)
             
             # 13. Appoint date
             data_row['Appoint date'] = ""
-            
+
             # 14. Reseller name
+            reseller_name = self.safe_read_cell(ws_input, 'D13', "")
             data_row['Reseller name'] = reseller_name
             
             # 15. Store name
@@ -367,9 +466,23 @@ class CostTrackerExtractor:
                 # 37. Year 1 total expenses (USD) - 取负数
                 c70 = self.safe_read_cell(ws_pnl_usd, 'C70', 0)
                 data_row['Year 1 total expenses (USD)'] = c70 * -1
-                
-                # 38. Year 1 total revised expenses (USD)
-                data_row['Year 1 total revised expenses (USD)'] = self.safe_read_cell(ws_pnl_usd, 'AK41', 0)
+
+                # 38. Year 1 total revised expenses (USD) - 需要先读取 Rent/month contract RMB
+                # 公式: =IF(BD="", AK, AK+(BD-BB)*12/7.172)
+                # BD = Rent/month contract RMB (Input!M48)
+                # BB = Rent/month Reseller LC (已在后面计算)
+                # AK = Year 1 total expenses (USD)
+                rent_contract_rmb = self.safe_read_cell(ws_input, 'M48', 0)  # BD
+                # 注意：BB 需要在这里提前计算
+                n48_value = self.safe_read_cell(ws_input, 'N48', 0)
+                rent_reseller_lc = self.safe_divide(n48_value, 12, 0)  # BB
+
+                # 应用公式
+                if rent_contract_rmb == 0 or rent_contract_rmb == "":
+                    data_row['Year 1 total revised expenses (USD)'] = data_row['Year 1 total expenses (USD)']
+                else:
+                    adjustment = (rent_contract_rmb - rent_reseller_lc) * 12 / 7.172
+                    data_row['Year 1 total revised expenses (USD)'] = data_row['Year 1 total expenses (USD)'] + adjustment
                 
                 # 48. EBITDA
                 data_row['EBITDA'] = self.safe_read_cell(ws_pnl_usd, 'H88', 0)
@@ -412,83 +525,161 @@ class CostTrackerExtractor:
             net_income = data_row['Year 1 net income (USD)']
             data_row['Year 1 net income %'] = self.safe_divide(net_income, total_revenue, 0)
 
-            # 44. Rent/ month excl. utilities from Reseller (LC)
+            # 44-48: Year 2 数据
+            # 44. Year 2 CPU ST/week
+            data_row['Year 2 CPU ST/week'] = self.safe_read_cell(ws_input, 'W52', 0)
+
+            # 45. Year 2 iPod ST/week
+            data_row['Year 2 iPod ST/week'] = self.safe_read_cell(ws_input, 'W55', 0)
+
+            # 46. Year 2 iPhone ST/week
+            data_row['Year 2 iPhone ST/week'] = self.safe_read_cell(ws_input, 'W51', 0)
+
+            # 47. Year 2 iPad ST/week
+            data_row['Year 2 iPad ST/week'] = self.safe_read_cell(ws_input, 'W53', 0)
+
+            # 48-52: Year 2 Revenue and Profit (从 Partner P&L ($USD) sheet)
+            if ws_pnl_usd:
+                # 48. Year 2 Apple Revenue
+                data_row['Year 2 Apple Revenue'] = self.safe_read_cell(ws_pnl_usd, 'D10', 0)
+
+                # 49. Year 2 Total Revenue (USD)
+                data_row['Year 2 Total Revenue (USD)'] = self.safe_read_cell(ws_pnl_usd, 'D9', 0)
+
+                # 50. Year 2 gross profit (USD)
+                data_row['Year 2 gross profit (USD)'] = self.safe_read_cell(ws_pnl_usd, 'D69', 0)
+
+                # 51. Year 2 gross margin %
+                data_row['Year 2 gross margin %'] = self.safe_read_cell(ws_pnl_usd, 'H69', 0)
+
+                # 52. Year 2 net income (USD)
+                year2_gross_profit = data_row['Year 2 gross profit (USD)']
+                year2_total_expenses = self.safe_read_cell(ws_pnl_usd, 'D70', 0) * -1
+                data_row['Year 2 net income (USD)'] = year2_gross_profit - year2_total_expenses
+
+                # 53. Year 2 net income %
+                year2_total_revenue = data_row['Year 2 Total Revenue (USD)']
+                data_row['Year 2 net income %'] = self.safe_divide(data_row['Year 2 net income (USD)'], year2_total_revenue, 0)
+            else:
+                data_row['Year 2 Apple Revenue'] = 0
+                data_row['Year 2 Total Revenue (USD)'] = 0
+                data_row['Year 2 gross profit (USD)'] = 0
+                data_row['Year 2 gross margin %'] = 0
+                data_row['Year 2 net income (USD)'] = 0
+                data_row['Year 2 net income %'] = 0
+
+            # 54. Rent/ month excl. utilities from Reseller (LC)
             n48_value = self.safe_read_cell(ws_input, 'N48', 0)
             data_row['Rent/ month excl. utilities from Reseller (LC)'] = self.safe_divide(n48_value, 12, 0)
 
-            # 45. Rent/sqm/day (LC) - 新增字段
+            # 55. Rent/sqm/day (LC)
             rent_per_month = data_row['Rent/ month excl. utilities from Reseller (LC)']
             store_size = data_row.get('Store size', 0)
             data_row['Rent/sqm/day (LC)'] = self.safe_divide(rent_per_month, (store_size * 30), 0)
 
-            # 46. Biz plan property cost/year incl. utilities (USD)
+            # 56. Rent/month excl. utilities from contract (RMB)
+            data_row['Rent/month excl. utilities from contract (RMB)'] = self.safe_read_cell(ws_input, 'M48', 0)
+
+            # 57. Biz plan rent / Actual rent
+            rent_contract_rmb = data_row['Rent/month excl. utilities from contract (RMB)']
+            rent_reseller_lc = data_row['Rent/ month excl. utilities from Reseller (LC)']
+            exchange_rate = self.safe_read_cell(ws_input, 'P8', 7.172)
+            if exchange_rate == 0:
+                exchange_rate = 7.172
+            # 将 Reseller LC 转换为 RMB 进行比较
+            rent_reseller_rmb = rent_reseller_lc * exchange_rate
+            data_row['Biz plan rent / Actual rent'] = self.safe_divide(rent_contract_rmb, rent_reseller_rmb, 0)
+
+            # 58. Biz plan property cost/year incl. utilities (USD)
             data_row['Biz plan property cost/year incl. utilities (USD)'] = self.safe_read_cell(ws_input, 'M53', 0)
 
-            # 47. Property cost/sqm/yr - 新增字段
+            # 59. Property cost/sqm/yr
             property_cost_year = data_row['Biz plan property cost/year incl. utilities (USD)']
             data_row['Property cost/sqm/yr'] = self.safe_divide(property_cost_year, store_size, 0)
 
-            # 48. Utilities as % of rent cost - 新增字段
-            data_row['Utilities as % of rent cost'] = 0  # 需要具体单元格位置
+            # 60. Utilities as % of rent cost
+            # 公式: =(BF4167-BB4167*12/$P$8)/BF4167
+            # BF = Biz plan property cost/year incl. utilities (USD)
+            # BB = Rent/month Reseller LC
+            # $P$8 = 汇率 (通常从 Input!P8 读取，如果为空则使用 7.172)
+            exchange_rate = self.safe_read_cell(ws_input, 'P8', 7.172)
+            if exchange_rate == 0:
+                exchange_rate = 7.172  # 默认汇率
 
-            # 49. Property cost incl. utilities as % of total rev. - 新增字段
+            property_cost_year = data_row['Biz plan property cost/year incl. utilities (USD)']
+            rent_month_lc = data_row['Rent/ month excl. utilities from Reseller (LC)']
+
+            if property_cost_year != 0:
+                utilities_cost = property_cost_year - (rent_month_lc * 12 / exchange_rate)
+                data_row['Utilities as % of rent cost'] = self.safe_divide(utilities_cost, property_cost_year, 0)
+            else:
+                data_row['Utilities as % of rent cost'] = 0
+
+            # 61. Property cost incl. utilities as % of total rev.
             data_row['Property cost incl. utilities as % of total rev.'] = self.safe_divide(property_cost_year, total_revenue, 0)
 
-            # 50. Total staff cost (USD)
+            # 62. Total staff cost (USD)
             data_row['Total staff cost (USD)'] = self.safe_read_cell(ws_input, 'M68', 0)
 
-            # 51. Staff cost as % of revenue - 新增字段
+            # 63. Staff cost as % of revenue
             staff_cost = data_row['Total staff cost (USD)']
             data_row['Staff cost as % of revenue'] = self.safe_divide(staff_cost, total_revenue, 0)
 
-            # 52. No. of staff
+            # 64. No. of staff
             m65 = self.safe_read_cell(ws_input, 'M65', 0)
             m66 = self.safe_read_cell(ws_input, 'M66', 0)
             m67 = self.safe_read_cell(ws_input, 'M67', 0)
             data_row['No. of staff'] = m65 + m66 + m67
 
-            # 53. Avg. montly Cost/staff (LC) - 新增字段
+            # 65. Avg. montly Cost/staff (LC)
             num_staff = data_row['No. of staff']
-            data_row['Avg. montly Cost/staff (LC)'] = self.safe_divide(staff_cost * 7 / 12, num_staff, 0) if num_staff > 0 else 0
+            data_row['Avg. montly Cost/staff (LC)'] = self.safe_divide(staff_cost * exchange_rate / 12, num_staff, 0) if num_staff > 0 else 0
 
-            # 54. Showroom staff as % of total staff cost - 新增字段
-            data_row['Showroom staff as % of total staff cost'] = 0  # 需要具体单元格位置
+            # 66. Showroom staff as % of total staff cost
+            data_row['Showroom staff as % of total staff cost'] = "100%"
 
-            # 55. SFF ($)
+            # 67. SFF ($)
             sff = self.safe_read_cell(ws_input, 'D56', 0)
             data_row['SFF ($)'] = sff
 
-            # 56. SLF ($)
+            # 68. SLF ($)
             slf = self.safe_read_cell(ws_input, 'D57', 0)
             data_row['SLF ($)'] = slf
 
-            # 57. Trafic Counter ($) - 新增字段
-            traffic_counter = self.safe_read_cell(ws_input, 'D58', 0)  # 假设在D58
+            # 69. Trafic Counter ($)
+            traffic_counter = self.safe_read_cell(ws_input, 'D58', 0)
             data_row['Trafic Counter ($)'] = traffic_counter
 
-            # 58. ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)) - 修改ROI计算
+            # 70. ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter))
             apple_rev = data_row['Year 1 Apple Rev (USD)']
             total_investment = sff + slf + traffic_counter
             data_row['ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)'] = self.safe_divide(apple_rev, total_investment, 0)
 
-            # 59. EBITDA (已在前面设置)
+            # 71. EBITDA (已在前面设置)
             # data_row['EBITDA'] 已经设置
 
-            # 60. Payback Period - 新增字段
-            # Payback Period = Total Investment / Annual Net Income
+            # 72. Payback Period
             annual_net_income = data_row['Year 1 net income (USD)']
             data_row['Payback Period'] = self.safe_divide(total_investment, annual_net_income, 0) if annual_net_income > 0 else 0
 
-            # 61. CY (当前年份)
+            # 73. Comment
+            data_row['Comment'] = ""
+
+            # 74-75. 空列 (保留两个空列)
+
+            # 76. CY (当前年份)
             data_row['CY'] = datetime.now().year
 
-            # 62. Financial Risk - 新增字段
-            data_row['Financial Risk'] = ""  # 需要具体逻辑或单元格位置
+            # 77. Financial Risk
+            data_row['Financial Risk'] = ""
 
-            # 63. Risk Comment - 新增字段
-            data_row['Risk Comment'] = ""  # 需要具体逻辑或单元格位置
+            # 78. Risk Comment
+            data_row['Risk Comment'] = ""
 
-            # 64. HQ Burden cost as % of revenue
+            # 79. New/Refit (重复字段，已在前面设置)
+            # 80. Review date (重复字段，已在前面设置)
+
+            # 81. HQ Burden cost as % of revenue
             data_row['HQ Burden cost as % of revenue'] = self.safe_read_cell(ws_input, 'M79', 0)
             
             # 添加元数据
@@ -658,6 +849,7 @@ class CostTrackerInterface:
     def __init__(self):
         self.all_data = []
         self.previous_file_path = None
+        self.new_data_file_path = None
         self.city_ranking_file_path = None
         self.reseller_list_file_path = None
 
@@ -832,6 +1024,27 @@ class CostTrackerInterface:
         upload_btn.bind("<Enter>", lambda e: upload_btn.config(bg="#42a5f5"))
         upload_btn.bind("<Leave>", lambda e: upload_btn.config(bg="#64b5f6"))
 
+        # New Data 文件选择（用于跨季度持续写入同一个文件）
+        tk.Label(control_panel, text="New Data File (Optional, Auto-Append)",
+             font=("Microsoft YaHei UI", 9, "bold"), bg="#ffffff", fg="#1976d2").pack(anchor='w', padx=15, pady=(15, 5))
+
+        new_file_frame = tk.Frame(control_panel, bg="#ffffff")
+        new_file_frame.pack(fill='x', padx=15, pady=5)
+
+        self.new_file_path_var = tk.StringVar()
+        new_entry = tk.Entry(new_file_frame, textvariable=self.new_file_path_var, width=23,
+             font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bg="#e3f2fd",
+             fg="#0d47a1", insertbackground="#1976d2", bd=1)
+        new_entry.pack(side='left', fill='x', expand=True, ipady=6)
+
+        new_btn = tk.Button(new_file_frame, text="Select", command=self.select_new_data_file,
+              font=("Microsoft YaHei UI", 9), bg="#64b5f6", fg="#ffffff",
+              relief=tk.FLAT, cursor="hand2", padx=12, pady=4, bd=0,
+              activebackground="#42a5f5", activeforeground="#ffffff")
+        new_btn.pack(side='right', padx=(8, 0))
+        new_btn.bind("<Enter>", lambda e: new_btn.config(bg="#42a5f5"))
+        new_btn.bind("<Leave>", lambda e: new_btn.config(bg="#64b5f6"))
+
         # 自动填充当前季度
         self.auto_fill_year_quarter()
 
@@ -915,7 +1128,7 @@ class CostTrackerInterface:
             ("📊 Statistics", self.view_statistics, "#42a5f5", "#1e88e5"),
             ("💾 Save", self.save_results, "#66bb6a", "#43a047"),
             ("🔄 Clear", self.clear_results, "#ef5350", "#e53935"),
-            ("🗑️ Clear File", self.clear_previous_file, "#ff9800", "#f57c00"),
+            ("🗑️ Clear File", self.clear_selected_files, "#ff9800", "#f57c00"),
             ("❓ Help", self.show_help, "#78909c", "#546e7a")
         ]
 
@@ -990,34 +1203,72 @@ class CostTrackerInterface:
             self.previous_file_path = file_path
             self.status_bar.config(text=f"Previous file loaded: {os.path.basename(file_path)}")
 
+    def select_new_data_file(self):
+        """优先选择已有 New Data 文件；如无则可新建"""
+        file_path = filedialog.askopenfilename(
+            title="Select Existing New Data File (Auto-Append Target)",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        # 未选择已有文件时，可选新建
+        if not file_path:
+            create_new = messagebox.askyesno(
+                "Create New Data File",
+                "No existing file selected. Create a new New Data file?"
+            )
+            if create_new:
+                file_path = filedialog.asksaveasfilename(
+                    title="Create New Data File (Auto-Append Target)",
+                    defaultextension=".xlsx",
+                    filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+                    initialfile="new_data.xlsx"
+                )
+
+        if file_path:
+            self.new_file_path_var.set(file_path)
+            self.new_data_file_path = file_path
+            if os.path.exists(file_path):
+                self.status_bar.config(text=f"New data file selected: {os.path.basename(file_path)}")
+            else:
+                self.status_bar.config(text=f"New data file will be created: {os.path.basename(file_path)}")
+
     def clear_previous_file(self):
         """清除已选择的上一次结果文件"""
         self.prev_file_path_var.set("")
         self.previous_file_path = None
         self.status_bar.config(text="Previous file cleared")
 
-    def load_previous_data(self):
-        """加载上一次的数据"""
-        if not self.previous_file_path or not os.path.exists(self.previous_file_path):
+    def clear_selected_files(self):
+        """清除已选择的 Previous/New Data 文件"""
+        self.prev_file_path_var.set("")
+        self.previous_file_path = None
+        if hasattr(self, 'new_file_path_var'):
+            self.new_file_path_var.set("")
+        self.new_data_file_path = None
+        self.status_bar.config(text="Selected files cleared")
+
+    def load_data_from_file(self, file_path):
+        """从指定结果文件加载历史数据"""
+        if not file_path or not os.path.exists(file_path):
             return None
 
         try:
-            # 读取上一次的结果文件
-            df_previous = pd.read_excel(self.previous_file_path)
-
-            # 转换为字典列表格式以保持一致性
+            df_previous = pd.read_excel(file_path)
             previous_data = df_previous.to_dict('records')
 
-            # 更新处理时间
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             for item in previous_data:
                 item['ProcessingTime'] = current_time
 
-            self.status_bar.config(text=f"Loaded {len(previous_data)} records from previous file")
+            self.status_bar.config(text=f"Loaded {len(previous_data)} records from {os.path.basename(file_path)}")
             return previous_data
         except Exception as e:
-            messagebox.showwarning("Warning", f"Failed to load previous file: {str(e)}")
+            messagebox.showwarning("Warning", f"Failed to load file: {str(e)}")
             return None
+
+    def load_previous_data(self):
+        """加载上一次的数据"""
+        return self.load_data_from_file(self.previous_file_path)
 
     def merge_data(self, new_data, previous_data):
         """合并新旧数据，去除重复"""
@@ -1027,12 +1278,12 @@ class CostTrackerInterface:
         # 合并数据
         merged_data = previous_data + new_data
 
-        # 去除可能的重复记录（基于Filename）
+        # 去重键：YearQuarter + Filename，避免跨季度同名文件互相覆盖
         seen = set()
         unique_data = []
 
         for item in merged_data:
-            key = item.get('Filename', '')
+            key = (item.get('YearQuarter', ''), item.get('Filename', ''))
             if key not in seen:
                 seen.add(key)
                 unique_data.append(item)
@@ -1073,9 +1324,15 @@ class CostTrackerInterface:
             reseller_list_path=self.reseller_list_file_path
         )
 
-        # 检查是否有上一次结果文件
+        # 检查是否有历史结果文件（优先 New Data 文件）
         previous_data = None
-        if self.previous_file_path:
+        merge_source_path = None
+        if self.new_data_file_path:
+            merge_source_path = self.new_data_file_path
+            self.status_bar.config(text=f"Loading new data file and extracting quarter {year}{quarter}...")
+            previous_data = self.load_data_from_file(self.new_data_file_path)
+        elif self.previous_file_path:
+            merge_source_path = self.previous_file_path
             self.status_bar.config(text=f"Loading previous data and extracting quarter {year}{quarter}...")
             previous_data = self.load_previous_data()
         else:
@@ -1101,6 +1358,18 @@ class CostTrackerInterface:
             self.summary_info = summary_info
 
             self.display_summary_info(summary_info)
+
+            # 若已选择 New Data 文件，则自动写回同一文件，实现跨季度持续累积
+            if self.new_data_file_path:
+                self.save_results_to_file(
+                    output_file=self.new_data_file_path,
+                    data_rows=self.all_data,
+                    header_source_path=merge_source_path,
+                    show_message=False
+                )
+                self.status_bar.config(
+                    text=f"Extraction completed and auto-saved to {os.path.basename(self.new_data_file_path)}")
+                return
 
             # 更新状态栏信息
             if previous_data is not None:
@@ -1187,14 +1456,20 @@ class CostTrackerInterface:
             'Year 1 gross margin %', 'Year 1 total expenses (USD)', 'Year 1 total revised expenses (USD)',
             'Credit card cost as % of revenue', 'Year 1 BE Revenue (USD/year)',
             'Year 1 BE Revenue (RMB/month)', 'Year 1 net income (USD)', 'Year 1 net income %',
+            'Year 2 CPU ST/week', 'Year 2 iPod ST/week', 'Year 2 iPhone ST/week', 'Year 2 iPad ST/week',
+            'Year 2 Apple Revenue', 'Year 2 Total Revenue (USD)', 'Year 2 gross profit (USD)',
+            'Year 2 gross margin %', 'Year 2 net income (USD)', 'Year 2 net income %',
             'Rent/ month excl. utilities from Reseller (LC)', 'Rent/sqm/day (LC)',
+            'Rent/month excl. utilities from contract (RMB)', 'Biz plan rent / Actual rent',
             'Biz plan property cost/year incl. utilities (USD)', 'Property cost/sqm/yr',
             'Utilities as % of rent cost', 'Property cost incl. utilities as % of total rev.',
             'Total staff cost (USD)', 'Staff cost as % of revenue', 'No. of staff',
             'Avg. montly Cost/staff (LC)', 'Showroom staff as % of total staff cost',
             'SFF ($)', 'SLF ($)', 'Trafic Counter ($)',
             'ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)', 'EBITDA', 'Payback Period',
-            'CY', 'Financial Risk', 'Risk Comment', 'HQ Burden cost as % of revenue'
+            'Comment',
+            'CY', 'Financial Risk', 'Risk Comment',
+            'HQ Burden cost as % of revenue'
         ]
         
         for i, field in enumerate(field_order, 1):
@@ -1229,31 +1504,21 @@ class CostTrackerInterface:
         close_btn.bind("<Enter>", lambda e: close_btn.config(bg="#1976d2"))
         close_btn.bind("<Leave>", lambda e: close_btn.config(bg="#2196f3"))
 
-    def save_results(self):
-        """保存结果到Excel"""
-        if not hasattr(self, 'all_data') or not self.all_data:
-            messagebox.showwarning("Warning", "No data to save, please extract data first")
-            return
-        
-        # 确定默认文件名
-        year = self.year_var.get()
-        quarter = self.quarter_var.get()
-        default_name = f"CostTracker_{year}{quarter}_Result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
-        output_file = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
-            initialfile=default_name
-        )
-        
-        if not output_file:
-            return
-        
-        try:
-            # 转换为DataFrame
-            df = pd.DataFrame(self.all_data)
-            
-            # 定义完整列顺序（64个字段 + 元数据）
+    def build_export_dataframe(self, data_rows, header_source_path=None):
+        """构建导出用 DataFrame（列顺序稳定）"""
+        df = pd.DataFrame(data_rows)
+
+        column_order = None
+        if header_source_path and os.path.exists(header_source_path):
+            try:
+                prev_header_df = pd.read_excel(header_source_path, nrows=0)
+                prev_columns = list(prev_header_df.columns)
+                if prev_columns:
+                    column_order = prev_columns
+            except Exception:
+                column_order = None
+
+        if column_order is None:
             column_order = [
                 'RTM Level 4', 'APR or APP', 'RTM#', 'Self-fund', 'Review date', 'New/Refit',
                 'Status', 'Comments', 'HQ ID', 'Case No.', 'Apple ID', 'SFOID/工单编号',
@@ -1266,53 +1531,103 @@ class CostTrackerInterface:
                 'Year 1 gross margin %', 'Year 1 total expenses (USD)', 'Year 1 total revised expenses (USD)',
                 'Credit card cost as % of revenue', 'Year 1 BE Revenue (USD/year)',
                 'Year 1 BE Revenue (RMB/month)', 'Year 1 net income (USD)', 'Year 1 net income %',
+                'Year 2 CPU ST/week', 'Year 2 iPod ST/week', 'Year 2 iPhone ST/week', 'Year 2 iPad ST/week',
+                'Year 2 Apple Revenue', 'Year 2 Total Revenue (USD)', 'Year 2 gross profit (USD)',
+                'Year 2 gross margin %', 'Year 2 net income (USD)', 'Year 2 net income %',
                 'Rent/ month excl. utilities from Reseller (LC)', 'Rent/sqm/day (LC)',
+                'Rent/month excl. utilities from contract (RMB)', 'Biz plan rent / Actual rent',
                 'Biz plan property cost/year incl. utilities (USD)', 'Property cost/sqm/yr',
                 'Utilities as % of rent cost', 'Property cost incl. utilities as % of total rev.',
                 'Total staff cost (USD)', 'Staff cost as % of revenue', 'No. of staff',
                 'Avg. montly Cost/staff (LC)', 'Showroom staff as % of total staff cost',
                 'SFF ($)', 'SLF ($)', 'Trafic Counter ($)',
                 'ROI (Apple Branded Revenue/(SFF+SLF+Traffic Counter)', 'EBITDA', 'Payback Period',
-                'CY', 'Financial Risk', 'Risk Comment', 'HQ Burden cost as % of revenue',
+                'Comment',
+                'CY', 'Financial Risk', 'Risk Comment',
+                'New/Refit', 'Review date', 'HQ Burden cost as % of revenue',
                 'Filename', 'Year', 'Quarter', 'Week', 'YearQuarter', 'ProcessingTime'
             ]
-            
-            # 确保所有列都存在
-            existing_columns = [col for col in column_order if col in df.columns]
-            df_display = df[existing_columns]
-            
-            # 保存到Excel
+
+        for col in column_order:
+            if col in df.columns:
+                continue
+            match = re.match(r'^(.*)\.(\d+)$', str(col))
+            if match:
+                base_col = match.group(1)
+                if base_col in df.columns:
+                    df[col] = df[base_col]
+                    continue
+            df[col] = ""
+
+        return df[column_order], column_order
+
+    def save_results_to_file(self, output_file, data_rows=None, header_source_path=None, show_message=True):
+        """保存结果到指定文件（支持自动续写场景）"""
+        if data_rows is None:
+            data_rows = self.all_data
+
+        if not data_rows:
+            if show_message:
+                messagebox.showwarning("Warning", "No data to save, please extract data first")
+            return False
+
+        try:
+            df_display, column_order = self.build_export_dataframe(data_rows, header_source_path)
             df_display.to_excel(output_file, index=False, sheet_name='Cost Tracker Data')
-            
             self.output_file_path = output_file
 
-            success_msg = f"Data saved to:\n{output_file}\n\n"
-            success_msg += f"✓ Saved {len(df_display)} records\n"
-            success_msg += f"✓ Processed {self.summary_info.get('WeeksProcessed', '?')} weeks\n"
-            success_msg += f"✓ Total fields: 64 + metadata\n"
+            if show_message:
+                success_msg = f"Data saved to:\n{output_file}\n\n"
+                success_msg += f"✓ Saved {len(df_display)} records\n"
+                success_msg += f"✓ Processed {self.summary_info.get('WeeksProcessed', '?')} weeks\n"
+                success_msg += f"✓ Total fields: {len(column_order) - 6} data fields + 6 metadata fields\n"
+                messagebox.showinfo("Save Successful", success_msg)
 
-            if hasattr(self, 'previous_file_path') and self.previous_file_path:
-                success_msg += f"✓ Merged with previous file: {os.path.basename(self.previous_file_path)}\n"
-            else:
-                success_msg += "✓ Created new result file\n"
+                if messagebox.askyesno("Open File", "Open the result file now?"):
+                    try:
+                        if os.name == 'nt':
+                            os.startfile(output_file)
+                        elif os.name == 'posix':
+                            import subprocess
+                            subprocess.call(['open', output_file])
+                    except Exception as e:
+                        messagebox.showwarning("Cannot Open", f"Cannot auto-open file: {e}")
 
-            messagebox.showinfo("Save Successful", success_msg)
-            
-            # 询问是否立即打开结果文件
-            if messagebox.askyesno("Open File", "Open the result file now?"):
-                try:
-                    if os.name == 'nt':
-                        os.startfile(output_file)
-                    elif os.name == 'posix':
-                        import subprocess
-                        subprocess.call(['open', output_file])
-                except Exception as e:
-                    messagebox.showwarning("Cannot Open", f"Cannot auto-open file: {e}")
-        
+            return True
         except Exception as e:
-            messagebox.showerror("Save Failed", f"Error saving file:\n{str(e)}")
+            if show_message:
+                messagebox.showerror("Save Failed", f"Error saving file:\n{str(e)}")
+            else:
+                print(f"[ERROR] Auto-save failed: {str(e)}")
             import traceback
             traceback.print_exc()
+            return False
+
+    def save_results(self):
+        """保存结果到Excel"""
+        if not hasattr(self, 'all_data') or not self.all_data:
+            messagebox.showwarning("Warning", "No data to save, please extract data first")
+            return
+
+        year = self.year_var.get()
+        quarter = self.quarter_var.get()
+        default_name = f"CostTracker_{year}{quarter}_Result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+        output_file = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+            initialfile=default_name
+        )
+        if not output_file:
+            return
+
+        header_source_path = None
+        if self.new_data_file_path and os.path.exists(self.new_data_file_path):
+            header_source_path = self.new_data_file_path
+        elif self.previous_file_path and os.path.exists(self.previous_file_path):
+            header_source_path = self.previous_file_path
+
+        self.save_results_to_file(output_file, data_rows=self.all_data, header_source_path=header_source_path, show_message=True)
 
     def display_summary_info(self, summary_info):
         """显示汇总信息"""
@@ -1367,7 +1682,7 @@ class CostTrackerInterface:
         
         summary_content += f"📝 Record Statistics:\n"
         summary_content += f"  Total Records: {summary_info['TotalRecords']}\n"
-        summary_content += f"  Fields per Record: 50 + metadata\n\n"
+        summary_content += f"  Fields per Record: 81 data fields + metadata\n\n"
         
         if summary_info['FailedFileList']:
             summary_content += f"❌ Failed File List (Top 10):\n"
@@ -1486,15 +1801,17 @@ class CostTrackerInterface:
 
         1. Select Quarter folder containing W1-W13 subfolders
         2. Select Year and Quarter information
-        3. (Optional) Upload previous result file to append new data
-        4. Click "Start Extraction" button to process
-        5. View extraction results in the table
-        6. Double-click any row to view detailed 50-field data
-        7. Click "Save Results" to save data to Excel
+        3. Select City Ranking file (Required)
+        4. Select Reseller List file (Required)
+        5. (Optional) Upload previous result file to append new data
+        6. Click "Start Extraction" button to process
+        7. View extraction results in the table
+        8. Double-click any row to view detailed data
+        9. Click "Save Results" to save data to Excel
 
         Required Files:
-        - city ranking.xlsx (in same directory as script)
-        - Reseller list_FY26Q1W13.xlsx (in same directory as script)
+        - City Ranking file (city ranking.xlsx)
+        - Reseller List file (Reseller list_FY26Q1W13.xlsx)
 
         Folder Structure Requirement:
         Quarter Folder/
@@ -1506,12 +1823,14 @@ class CostTrackerInterface:
         └── W13/         (Week 13 folder)
 
         Features:
-        - Extracts 50 fields from each Excel file
+        - Extracts 81 data fields from each Excel file
         - VLOOKUP functionality for City Rank and RTM Level 4
         - Automatic file name parsing for Case No. and SFOID
         - Processes entire quarter folder structure
         - Week-by-week statistics
         - Merge with previous result files (duplicates removed by Filename)
+        - Year 2 data extraction
+        - Comprehensive rent and property cost analysis
 
         Note:
         - Week folders must be named W1, W2, ..., W13
@@ -1532,15 +1851,17 @@ def main():
     print("    Brief Cost Tracker Case Data Builder v1.0")
     print("=" * 60)
     print("Features:")
-    print("  - Extracts 50 fields from Excel files")
+    print("  - Extracts 81 data fields from Excel files")
     print("  - VLOOKUP for City Rank and RTM Level 4")
     print("  - Automatic quarter folder processing")
     print("  - Week detection from folder names (W1-W13)")
     print("  - Process entire quarter in one operation")
+    print("  - Year 2 data extraction")
+    print("  - Comprehensive rent and property cost analysis")
     print("")
     print("Required Files:")
-    print("  - city ranking.xlsx")
-    print("  - Reseller list_FY26Q1W13.xlsx")
+    print("  - City Ranking file")
+    print("  - Reseller List file")
     print("=" * 60)
 
     try:
